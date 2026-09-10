@@ -4,10 +4,10 @@
  * `tsc -p tsconfig.build.json` already emits the ESM tree and the `.d.ts`
  * files. This adds the shapes tsc cannot produce:
  *
- *   dist/index.cjs         require("naksha")
+ *   dist/index.cjs         require("nepal-naksha")
  *   dist/index.esm.js      the `module` / `browser` fields
  *   dist/naksha.min.js     <script src=…> → window.naksha
- *   dist/react/index.cjs   require("naksha/react")
+ *   dist/react/index.cjs   require("nepal-naksha/react")
  *   dist/react/index.esm.js
  *   dist/**\/*.d.cts       types for the `require` condition
  *
@@ -25,7 +25,7 @@ const SRC = new URL("../src/", import.meta.url).pathname;
 const OUT = new URL("../dist/", import.meta.url).pathname;
 
 /**
- * Keep `naksha/react` from carrying its own copy of `src/index.ts`.
+ * Keep `nepal-naksha/react` from carrying its own copy of `src/index.ts`.
  *
  * That one module owns the district table and the lazily-decoded raster. A
  * second copy would decode the raster twice and — worse — hand `onRegionEnter`
@@ -41,7 +41,7 @@ const singleCore: Plugin = {
   name: "single-core",
   setup(pluginBuild) {
     pluginBuild.onResolve({ filter: /^\.\.\/index\.ts$/ }, () => ({
-      path: "naksha",
+      path: "nepal-naksha",
       external: true,
     }));
   },

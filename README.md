@@ -14,7 +14,7 @@ coverage drawn on top.
 → **[Live demo](https://erajkhatiwada.github.io/naksha/)**
 
 ```bash
-npm i naksha
+npm i nepal-naksha
 ```
 
 ---
@@ -60,7 +60,7 @@ travels that way is your data's problem, not the map's.
 ### React
 
 ```tsx
-import { Naksha } from "naksha/react";
+import { Naksha } from "nepal-naksha/react";
 
 const KTM = { lng: 85.3591, lat: 27.6966, label: "Kathmandu" };
 const PKR = { lng: 83.982, lat: 28.201, label: "Pokhara" };
@@ -83,7 +83,7 @@ framework attached.
 ### Anywhere else
 
 ```ts
-import { renderNepal, VIEWS } from "naksha";
+import { renderNepal, VIEWS } from "nepal-naksha";
 
 const svg = renderNepal({
   bbox: VIEWS.bagmati,
@@ -99,13 +99,13 @@ so it works in Node, in a Worker, in an email, or piped straight to a file.
 ### CommonJS
 
 ```js
-const { renderNepal, districtAt } = require("naksha");
+const { renderNepal, districtAt } = require("nepal-naksha");
 ```
 
 ### No build step at all
 
 ```html
-<script src="https://unpkg.com/naksha"></script>
+<script src="https://unpkg.com/nepal-naksha"></script>
 <script>
   document.body.innerHTML = naksha.renderNepal({ points: stops });
 </script>
@@ -365,7 +365,7 @@ no `Image`, no canvas, no `fetch` and no top-level await.
 | `lightTheme` / `darkTheme` | Theme presets |
 | `placeParts(point, lang?)` | The pieces of a place's name: its own, district, province, HQ, p-code |
 | `describePlace(point, opts?)` | `"Lahan, Siraha"` — place then district |
-| `Naksha` (`naksha/react`) | React component |
+| `Naksha` (`nepal-naksha/react`) | React component |
 
 Every colour and size is a theme prop, and all sizes are in **dot units** —
 the viewBox is `0 0 cols rows`, so 1 unit = 1 dot spacing and a theme looks
@@ -380,7 +380,7 @@ naksha never makes you accept its idea of how a name should read. `placeParts`
 hands back the pieces; compose whatever you like.
 
 ```ts
-import { placeParts, describePlace } from "naksha";
+import { placeParts, describePlace } from "nepal-naksha";
 
 const lahan = { lng: 86.4833, lat: 26.72, label: "Lahan", labelNp: "लहान" };
 
@@ -417,7 +417,7 @@ If the place you want *is* a district headquarters, you don't even need the
 coordinate — 74 of the 77 carry one:
 
 ```ts
-import { districtByName } from "naksha";
+import { districtByName } from "nepal-naksha";
 
 const jumla = districtByName("Jumla")!;
 jumla.hq;    // "Chandannath"
@@ -468,7 +468,7 @@ anchor with the district's name, not a town's.
 events is a separate, browser-only step against the element you mounted:
 
 ```ts
-import { renderNepal, nepalGrid, attachInteractions, districtById } from "naksha";
+import { renderNepal, nepalGrid, attachInteractions, districtById } from "nepal-naksha";
 
 const grid = nepalGrid();
 el.innerHTML = renderNepal({ points });

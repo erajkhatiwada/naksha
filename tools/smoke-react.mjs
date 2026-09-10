@@ -1,5 +1,5 @@
 /**
- * Render `naksha/react` against whichever React is installed.
+ * Render `nepal-naksha/react` against whichever React is installed.
  *
  * The peer range is `>=16.14` — 16.14 being the oldest React that ships
  * `react/jsx-runtime`, which the automatic JSX transform requires. The wrapper
@@ -90,7 +90,7 @@ function render(React, renderToStaticMarkup, Naksha, label) {
   return html;
 }
 
-// --- require("naksha/react") ---------------------------------------------
+// --- require("nepal-naksha/react") ---------------------------------------------
 const cjs = render(
   require("react"),
   require("react-dom/server").renderToStaticMarkup,
@@ -104,14 +104,14 @@ const cjs = render(
 // `districtByName` returns. If build-dist.ts's plugin ever stops matching, the
 // table lands in here and this is what notices.
 const reactCjs = readFileSync(new URL("../dist/react/index.cjs", import.meta.url), "utf8");
-assert.match(reactCjs, /require\("naksha"\)/, "the react bundle does not reach for the core");
+assert.match(reactCjs, /require\("nepal-naksha"\)/, "the react bundle does not reach for the core");
 assert.ok(
   !reactCjs.includes("Bhaktapur"),
   "the react bundle inlined the district table; the core is meant to stay external",
 );
-assert.equal(require("naksha").DISTRICTS.length, 77, "the core the react bundle requires is broken");
+assert.equal(require("nepal-naksha").DISTRICTS.length, 77, "the core the react bundle requires is broken");
 
-// --- import "naksha/react" ------------------------------------------------
+// --- import "nepal-naksha/react" ------------------------------------------------
 // React 16 and 17 have no `exports` map, so Node's ESM resolver cannot find
 // `react/jsx-runtime` — it does no extension probing for legacy packages. Every
 // bundler that targets those versions (webpack 4, CRA 4) resolves it fine, so

@@ -37,7 +37,7 @@ assert.ok(svg.endsWith("</svg>"));
 // --- require() ------------------------------------------------------------
 // Resolved through `exports.require`, and separately through `main` for the
 // resolvers that predate `exports`. Both must land on the same file.
-const cjs = require("naksha");
+const cjs = require("nepal-naksha");
 assert.equal(cjs.DISTRICTS.length, 77);
 assert.equal(cjs.districtAt({ lng: 85.3591, lat: 27.6966 })?.name, "Kathmandu");
 assert.ok(cjs.renderNepal().startsWith("<svg "));

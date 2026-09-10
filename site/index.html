@@ -58,7 +58,7 @@
           Zero runtime dependencies. The entire geometry layer is 42 KB.
         </p>
         <div class="cta">
-          <code class="install">npm i naksha</code>
+          <code class="install">npm i nepal-naksha</code>
           <a class="btn" href="#demo">See it working</a>
         </div>
         <p class="boundary">
@@ -346,7 +346,7 @@
         <div class="code-card">
           <h3>React</h3>
           <pre><code>import { useState } from "react";
-import { Naksha } from "naksha/react";
+import { Naksha } from "nepal-naksha/react";
 
 const KTM = { lng: 85.3591, lat: 27.6966, label: "Kathmandu" };
 const PKR = { lng: 83.9820, lat: 28.2010, label: "Pokhara" };
@@ -379,7 +379,7 @@ export function RouteMap() {
   nepalGrid,
   attachInteractions,
   districtById,
-} from "naksha";
+} from "nepal-naksha";
 
 const locations = [
   { lng: 85.3591, lat: 27.6966, label: "Kathmandu" },
@@ -403,7 +403,7 @@ attachInteractions(el.querySelector("svg"), grid, {
         </div>
         <div class="code-card">
           <h3>CommonJS</h3>
-          <pre><code>const { renderNepal, districtAt, VIEWS } = require("naksha");
+          <pre><code>const { renderNepal, districtAt, VIEWS } = require("nepal-naksha");
 
 // The same API, compiled to ES2018 — so webpack 4,
 // CRA 4 and older Node parse it without a transform.
@@ -416,7 +416,7 @@ if (d) console.log(d.name, d.nameNp); // Kathmandu काठमाडौँ</cod
         <div class="code-card">
           <h3>No build step at all</h3>
           <pre><code>&lt;div id="map"&gt;&lt;/div&gt;
-&lt;script src="https://unpkg.com/naksha"&gt;&lt;/script&gt;
+&lt;script src="https://unpkg.com/nepal-naksha"&gt;&lt;/script&gt;
 &lt;script&gt;
   // One global. 38 KB over the wire, no loader,
   // no bundler, nothing to configure.

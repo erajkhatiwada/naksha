@@ -28,8 +28,8 @@ const repo = fileURLToPath(new URL("..", import.meta.url));
 const tsc = join(repo, "node_modules/typescript/bin/tsc");
 
 const GOOD_JSX = `
-import { renderNepal, districtByName, VIEWS, type Region } from "naksha";
-import { Naksha } from "naksha/react";
+import { renderNepal, districtByName, VIEWS, type Region } from "nepal-naksha";
+import { Naksha } from "nepal-naksha/react";
 
 const svg: string = renderNepal({ bbox: VIEWS.bagmati });
 const region: Region | undefined = districtByName("Kathmandu");
@@ -39,8 +39,8 @@ export const el = <Naksha height={20} title={region?.name ?? svg} />;
 // .mts and .cts have no JSX-bearing counterpart, so the component is checked as
 // a value instead. Resolution is what is under test, not the JSX transform.
 const GOOD_PLAIN = `
-import { renderNepal, districtByName, VIEWS, type Region } from "naksha";
-import { Naksha } from "naksha/react";
+import { renderNepal, districtByName, VIEWS, type Region } from "nepal-naksha";
+import { Naksha } from "nepal-naksha/react";
 
 export const svg: string = renderNepal({ bbox: VIEWS.bagmati });
 export const region: Region | undefined = districtByName("Kathmandu");
@@ -48,7 +48,7 @@ export const component: typeof Naksha = Naksha;
 `;
 
 const BAD = `
-import { renderNepal } from "naksha";
+import { renderNepal } from "nepal-naksha";
 export const wrong: number = renderNepal();
 `;
 
@@ -104,7 +104,7 @@ try {
   // .cts carry the format themselves rather than inheriting it.
   writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "consumer", private: true }));
   mkdirSync(join(dir, "node_modules/@types"), { recursive: true });
-  symlinkSync(repo, join(dir, "node_modules/naksha"), "dir");
+  symlinkSync(repo, join(dir, "node_modules/nepal-naksha"), "dir");
   for (const dep of ["@types/react", "csstype"]) {
     symlinkSync(join(repo, "node_modules", dep), join(dir, "node_modules", dep), "dir");
   }
