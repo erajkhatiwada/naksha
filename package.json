@@ -1,0 +1,98 @@
+{
+  "name": "naksha",
+  "version": "1.0.0",
+  "description": "A modern, simple Nepal map — routes, networks and coverage on a dot grid. Presentation layer, not navigation.",
+  "license": "MIT",
+  "author": "Eraj Khatiwada",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/erajkhatiwada/naksha.git"
+  },
+  "homepage": "https://erajkhatiwada.github.io/naksha/",
+  "bugs": "https://github.com/erajkhatiwada/naksha/issues",
+  "keywords": [
+    "nepal",
+    "map",
+    "dotted-map",
+    "dot-map",
+    "route-map",
+    "svg",
+    "react",
+    "dataviz"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      },
+      "default": "./dist/index.js"
+    },
+    "./react": {
+      "import": {
+        "types": "./dist/react/index.d.ts",
+        "default": "./dist/react/index.js"
+      },
+      "require": {
+        "types": "./dist/react/index.d.cts",
+        "default": "./dist/react/index.cjs"
+      },
+      "default": "./dist/react/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.esm.js",
+  "browser": "./dist/index.esm.js",
+  "types": "./dist/index.d.ts",
+  "unpkg": "./dist/naksha.min.js",
+  "jsdelivr": "./dist/naksha.min.js",
+  "files": [
+    "dist",
+    "react",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "fetch": "node tools/fetch-data.ts",
+    "data": "node tools/build-raster.ts",
+    "verify": "node tools/verify.ts",
+    "build": "tsc -p tsconfig.build.json && node tools/build-dist.ts",
+    "site": "node tools/build-site.ts",
+    "dev": "node tools/build-site.ts --dev",
+    "test": "node --test test/*.test.ts",
+    "check": "tsc --noEmit",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run check && npm test"
+  },
+  "peerDependencies": {
+    "react": ">=16.14"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.0.2",
+    "esbuild": "^0.24.2",
+    "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": ">=22.18",
+      "onFail": "error"
+    }
+  }
+}

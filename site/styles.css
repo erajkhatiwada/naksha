@@ -1,0 +1,647 @@
+/* Dark is the default, in the CSS rather than in the boot script, so a visitor
+   with JavaScript off gets the intended page rather than a light fallback.
+   Light is opt-in via [data-theme="light"] on <html>, set by the nav toggle and
+   persisted in localStorage. */
+/* Three surface steps, darkest first: --ground is the page, --panel is a
+   raised card, --bg is the cleanest fill and marks the active/selected thing
+   sitting on a panel. */
+:root {
+  /* `color-scheme` is not decoration: it is what makes the native <select>
+     menus, the colour swatches and the scrollbars render dark. Without it they
+     stay light and sit on the page like cut-outs. */
+  color-scheme: dark;
+
+  --ground: #080b12;
+  --bg: #080b12;
+  --panel: #0e131d;
+  --panel-2: #131a26;
+  --line: #1d2532;
+  --text: #e9eef8;
+  --muted: #8996ad;
+  --map-dot: #6092d7;
+  --map-dot-hero: #6092d7;
+  --accent: #dc2626;
+
+  /* One height for every control, so `align-items: flex-end` does not stagger
+     their labels: a segmented control is naturally ~45px and a bare select or
+     colour swatch 38px, which pushed those two labels 6px down the row. */
+  --control-h: 45px;
+  --radius: 14px;
+  --max: 1180px;
+  --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  /* Near-neutral grey, not blue-grey: 2-3 levels of blue over red rather than
+     12. The dots are neutral, so tinted surfaces under them read as a colour
+     cast. Text stays slate — cool type on neutral ground is fine, the reverse
+     is what looked off. Light used to run ground and panel 3% apart on pure
+     white, which read as one flat sheet; these steps give it the same depth
+     dark already had. */
+  --ground: #eeeff0;
+  --bg: #ffffff;
+  --panel: #f7f7f8;
+  --panel-2: #e5e6e8;
+  --line: #dbdde0;
+  --text: #0f172a;
+  --muted: #535e6e;
+  --map-dot: #6a6b6c;
+  /* The hero map has no panel under it — its dots sit straight on --ground,
+     which is darker than --panel. The two surfaces can share one value at a
+     mid-grey; the variable stays so the hero can diverge again if either
+     surface moves. */
+  --map-dot-hero: #6a6b6c;
+}
+
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 16.5px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: inherit; }
+
+h1, h2, h3 { line-height: 1.12; letter-spacing: -0.022em; margin: 0; }
+
+section { padding: 92px 28px; }
+section > * { max-width: var(--max); margin-inline: auto; }
+
+.section-head { margin-bottom: 44px; }
+.section-head h2 { font-size: clamp(28px, 4vw, 38px); margin-bottom: 12px; }
+.section-head p { color: var(--muted); margin: 0; max-width: 640px; }
+
+/* "Try this" list under a section lede. Lives inside .section-head rather than
+   as a direct child of <section>, so it inherits the centring from
+   `section > *` and sidesteps the margin-shorthand trap entirely. Kept as rules
+   rather than panels: the controls directly below are already panelled, and a
+   second stack of boxes competes with them. */
+.try {
+  list-style: none;
+  padding: 0;
+  margin-top: 20px;
+  margin-bottom: 0;
+  max-width: 720px;
+  display: grid;
+  gap: 12px;
+}
+.try li {
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.6;
+  border-left: 2px solid var(--line);
+  padding-left: 14px;
+}
+/* The coordinate tip is the one people miss, so it gets the accent rule. */
+.try li:first-child { border-left-color: var(--accent); }
+.try b { color: var(--text); font-weight: 560; }
+
+/* ---------------------------------------------------------------- nav --- */
+.nav {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 14px 28px;
+  background: color-mix(in srgb, var(--ground) 86%, transparent);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--line);
+}
+.wordmark { font-weight: 640; letter-spacing: -0.03em; font-size: 18px; }
+.wordmark em {
+  font-style: normal;
+  color: var(--muted);
+  font-weight: 400;
+  margin-left: 9px;
+  font-size: 15px;
+}
+.nav nav { display: flex; gap: 6px; align-items: center; }
+.nav a {
+  text-decoration: none;
+  color: var(--muted);
+  padding: 7px 12px;
+  border-radius: 9px;
+  font-size: 14.5px;
+}
+.nav a:hover { color: var(--text); background: var(--panel-2); }
+.nav a.ghost { border: 1px solid var(--line); color: var(--text); }
+
+.theme-toggle {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  width: 36px;
+  height: 34px;
+  border-radius: 9px;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  margin-left: 4px;
+}
+.theme-toggle:hover { color: var(--text); background: var(--panel-2); }
+.theme-toggle svg { width: 17px; height: 17px; }
+.theme-toggle .moon { display: none; }
+.theme-toggle .sun { display: block; }
+:root[data-theme="light"] .theme-toggle .moon { display: block; }
+:root[data-theme="light"] .theme-toggle .sun { display: none; }
+
+/* --------------------------------------------------------------- hero --- */
+.hero {
+  display: grid;
+  grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
+  gap: 56px;
+  align-items: center;
+  padding-top: 72px;
+  padding-bottom: 64px;
+  /* Intentionally full-bleed — no max-width. The strip below is full-bleed
+     too, so the two read as one full-width top zone, and the narrowing at the
+     first heading becomes a shift into reading measure. */
+}
+.hero h1 { font-size: clamp(38px, 5.6vw, 62px); font-weight: 660; }
+.hero h1 .accent { color: var(--accent); }
+.lede { color: var(--muted); font-size: 18.5px; margin: 22px 0 30px; max-width: 46ch; }
+
+.cta { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.install {
+  font-family: var(--mono);
+  font-size: 14.5px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  padding: 11px 16px;
+  border-radius: 10px;
+}
+.install::before { content: "$ "; color: var(--muted); }
+.btn {
+  text-decoration: none;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 560;
+  font-size: 14.5px;
+  padding: 12px 20px;
+  border-radius: 10px;
+}
+.btn:hover { filter: brightness(1.1); }
+
+.boundary {
+  margin: 36px 0 0;
+  padding: 16px 18px;
+  border-left: 2px solid var(--accent);
+  background: var(--panel);
+  border-radius: 0 10px 10px 0;
+  color: var(--muted);
+  font-size: 15px;
+}
+.boundary strong { color: var(--text); display: block; margin-bottom: 4px; }
+
+.hero-map { margin: 0; }
+.hero-map svg { width: 100%; height: auto; display: block; }
+
+/* -------------------------------------------------------------- strip --- */
+.strip {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 1px;
+  background: var(--line);
+  border-block: 1px solid var(--line);
+  padding: 0;
+  max-width: none;
+}
+/* Cancel the section-level centring, which would give each cell its own
+   max-width and auto margins and break the even grid. */
+.strip > div {
+  max-width: none;
+  margin-inline: 0;
+  background: var(--bg);
+  padding: 26px 20px;
+  text-align: center;
+}
+.strip b { display: block; font-size: 24px; letter-spacing: -0.02em; }
+.strip span { color: var(--muted); font-size: 13.5px; }
+
+/* --------------------------------------------------------------- demo --- */
+/* 20px, not 26: the six controls measure 1069px and the section is 1180 wide,
+   so the original gap overflowed by 19px and dropped the accent picker onto a
+   second row. Keep any new control's width in mind here. */
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+  align-items: flex-end;
+  margin-bottom: 22px;
+}
+.control label {
+  display: block;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+/* A label with something beside it. The gap between the two carries the
+   spacing, so the label's own bottom margin moves up to the row. */
+.control-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.control-head label { margin-bottom: 0; }
+
+/* Undoes a choice, so it reads as a link rather than competing with the
+   controls it labels. */
+.linkish {
+  appearance: none;
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.linkish:hover { color: var(--text); }
+/* visibility, not display: this button appears the moment a colour is picked,
+   and a control that changes width can re-wrap the row and push the map down
+   under the pointer. Reserve the space always. */
+.linkish.is-hidden { visibility: hidden; }
+
+/* The districts view paints every dot from regionColor, so the base dot colour
+   has nothing left to show. Dimming says so; a live control that did nothing
+   would just look broken. */
+.control.is-off { opacity: 0.45; }
+.segmented {
+  display: inline-flex;
+  min-height: var(--control-h);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 3px;
+  gap: 2px;
+}
+.segmented button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 14px;
+  padding: 7px 13px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+.segmented button:hover:not(:disabled) { color: var(--text); }
+.segmented button:disabled { cursor: not-allowed; }
+.segmented button.on {
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+/* A select rather than a fifth segmented control: five placement rules spelled
+   out as buttons would be wider than the View, Interaction and Labels controls
+   put together and wrap the row on any laptop. */
+select {
+  appearance: none;
+  display: block;
+  font: inherit;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 30px 8px 12px;
+  height: var(--control-h);
+  cursor: pointer;
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+    linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position: right 14px center, right 9px center;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+select:disabled { cursor: not-allowed; }
+
+input[type="color"] {
+  appearance: none;
+  /* block, not the default inline-block: an inline swatch sits on a text
+     baseline and the line box reserves descender space under it, making this
+     control ~3px taller than its neighbours and staggering the row's labels. */
+  display: block;
+  width: 52px;
+  height: var(--control-h);
+  padding: 3px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  cursor: pointer;
+}
+input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 6px; }
+input[type="color"]:disabled { cursor: not-allowed; }
+
+/* margin-inline must stay auto, or the stage left-aligns to the section
+   padding while the controls and readout centre inside --max. */
+.stage {
+  margin: 0 auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--panel);
+}
+.stage svg { width: 100%; height: auto; display: block; }
+/* The cursor is the library's to set: attachInteractions raises it only over
+   something that actually has a click handler, so "Off" doesn't lie. */
+.stage svg:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.readout {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  margin-top: 18px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--panel);
+}
+.readout div {
+  flex: 1 1 132px;
+  padding: 13px 16px;
+  border-right: 1px solid var(--line);
+}
+.readout div:last-child { border-right: 0; }
+.readout k {
+  display: block;
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+.readout v { font-family: var(--mono); font-size: 16px; }
+
+/* Sits above the map, so its height is *reserved* rather than natural. The text
+   changes on every hover, and a line count that grows would push the map down
+   under the pointer — moving the dot being pointed at, changing the text again,
+   and oscillating. The reserve is measured, not guessed: --hint-lines is the
+   worst case over every view x interaction x language x hover state at that
+   width, plus one line of headroom. Re-measure before editing the copy. */
+.hint {
+  --hint-lines: 3;
+  color: var(--muted);
+  font-size: 14.5px;
+  line-height: 1.5;
+  /* `auto` inline, not 0: `section > *` centres children inside --max, and the
+     margin shorthand would reset that to flush-left against the section
+     padding while the map and controls stay centred. Same trap as .stage. */
+  margin: 0 auto 14px;
+  min-height: calc(var(--hint-lines) * 1.5em);
+}
+.hint b { color: var(--text); font-weight: 560; }
+/* Devanagari counterparts and the "how to drive this" aside, one step back. */
+.hint .alt-script { opacity: 0.7; }
+.hint code {
+  font-family: var(--mono);
+  font-size: 13px;
+  background: var(--panel-2);
+  padding: 1px 5px;
+  border-radius: 5px;
+}
+
+/* ------------------------------------------------------------- finder --- */
+/* Width is capped on the input, not on .finder: `section > *` centres every
+   direct child, so a narrow .finder would sit centred instead of flush left
+   with the controls and the stage. */
+.finder { position: relative; margin-bottom: 18px; }
+.finder label {
+  display: block;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+.finder input {
+  width: 100%;
+  max-width: 480px;
+  font: inherit;
+  font-size: 15px;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 14px;
+}
+.finder input::placeholder { color: var(--muted); opacity: 0.75; }
+.finder input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  background: var(--bg);
+}
+
+.find-results {
+  position: absolute;
+  z-index: 20;
+  left: 0;
+  width: 100%;
+  max-width: 480px;
+  margin: 6px 0 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgb(0 0 0 / 0.13);
+  max-height: 306px;
+  overflow-y: auto;
+}
+.find-results li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 14.5px;
+}
+.find-results li.active { background: var(--panel-2); }
+.find-results li.empty { color: var(--muted); cursor: default; }
+.find-results .nm { color: var(--text); font-weight: 560; }
+.find-results .alt { color: var(--muted); font-size: 13.5px; }
+.find-results .ctx {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+.find-results .tag {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 1px 5px;
+}
+
+/* ---------------------------------------------------------------- how --- */
+.cards { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; }
+.cards article {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 26px 26px 22px;
+}
+.cards h3 { font-size: 19px; margin-bottom: 10px; }
+.cards p { color: var(--muted); font-size: 15px; margin: 0 0 12px; }
+.cards em { color: var(--text); font-style: normal; }
+.fig { font-family: var(--mono); font-size: 13px; color: var(--muted) !important; }
+.fig b { color: var(--accent); font-weight: 500; }
+
+/* ---------------------------------------------------------------- use --- */
+.code-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; }
+/* Cards stretch and the <pre> fills the rest, so two samples of different
+   lengths still bottom out on the same line rather than leaving one panel
+   floating short of its neighbour. */
+.code-card { display: flex; flex-direction: column; }
+.code-card pre { flex: 1; }
+.code-grid h3 { font-size: 15px; color: var(--muted); font-weight: 520; margin-bottom: 10px; }
+pre {
+  margin: 0;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 22px;
+  overflow-x: auto;
+}
+code { font-family: var(--mono); font-size: 13.5px; line-height: 1.7; }
+
+/* Copy buttons are injected by main.ts, so these rules only ever apply where
+   the clipboard is actually available. `.has-copy` is set on the host at the
+   same time, so a page without JS gets no reserved gutter either. */
+.has-copy { position: relative; }
+.code-card pre.has-copy { padding-top: 44px; }
+.copy-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  font: 500 12px/1 var(--sans);
+  color: var(--muted);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 6px 10px;
+  cursor: pointer;
+  /* Hidden until the card is approached, but never to keyboard users. */
+  opacity: 0;
+  transition: opacity 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+.code-card:hover .copy-btn,
+.copy-btn:focus-visible,
+.copy-btn.is-done { opacity: 1; }
+.copy-btn:hover { color: var(--text); border-color: var(--muted); }
+.copy-btn.is-done { color: var(--accent); border-color: var(--accent); }
+/* The install chip is small and inline, so its button sits alongside rather
+   than over the text — there is no room to overlap. */
+.install.has-copy { padding-right: 62px; }
+.install .copy-btn { top: 50%; transform: translateY(-50%); right: 6px; opacity: 1; }
+/* Coarse pointers have no hover, so the button must always be visible. */
+@media (hover: none) {
+  .copy-btn { opacity: 1; }
+}
+p code { background: var(--panel-2); padding: 1px 5px; border-radius: 5px; font-size: 0.9em; }
+/* Longhand margins throughout: `section > *` centres direct children with
+   `margin-inline: auto`, and the shorthand would reset that to 0 — leaving
+   these flush against the section padding while the code grid stays centred. */
+.support-head {
+  font-size: 15px;
+  color: var(--muted);
+  font-weight: 520;
+  margin-top: 44px;
+  margin-bottom: 12px;
+}
+.support {
+  margin-top: 0;
+  margin-bottom: 0;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.support > div {
+  display: grid;
+  grid-template-columns: 150px 1fr;
+  gap: 18px;
+  padding: 14px 22px;
+  border-top: 1px solid var(--line);
+}
+.support > div:first-child { border-top: 0; }
+.support dt { color: var(--muted); font-size: 14px; }
+.support dd { margin: 0; font-size: 15px; }
+.support code {
+  font-family: var(--mono);
+  background: var(--panel-2);
+  padding: 1px 5px;
+  border-radius: 5px;
+  font-size: 0.86em;
+}
+
+.footnote { color: var(--muted); font-size: 15px; margin-top: 22px; max-width: 66ch; }
+
+footer {
+  border-top: 1px solid var(--line);
+  padding: 40px 28px 60px;
+  color: var(--muted);
+  font-size: 14px;
+}
+footer p { max-width: var(--max); margin: 0 auto 6px; }
+
+@media (max-width: 900px) {
+  .hero { grid-template-columns: 1fr; gap: 36px; }
+  .cards, .code-grid { grid-template-columns: 1fr; }
+  .strip { grid-template-columns: repeat(2, 1fr); }
+  section { padding: 64px 20px; }
+}
+
+@media (max-width: 560px) {
+  /* The 150px label column leaves too little for values like the TypeScript
+     row, which then wraps to one word per line. Stack instead. */
+  .support > div { grid-template-columns: 1fr; gap: 2px; }
+}
+
+/* Reserves carry one line of headroom over the measured worst case at each
+   width. Below 500px the type also drops a step: the hint wraps by character
+   count, so a smaller face fits more per line and costs fewer reserved lines
+   on exactly the screens where vertical space is scarcest. */
+@media (max-width: 750px) { .hint { --hint-lines: 4; } }
+@media (max-width: 560px) { .hint { --hint-lines: 5; } }
+@media (max-width: 500px) { .hint { font-size: 13.5px; } }
+@media (max-width: 400px) { .hint { --hint-lines: 6; } }
+
+/* The reserve exists to stop the map moving under a *hovering* cursor. With no
+   hover there is no cursor to protect: a tap changes the hint after the finger
+   has already lifted, so a reflow costs nothing — while the reserved space
+   costs real estate on exactly the screens with least of it. */
+@media (hover: none) {
+  .hint { min-height: 0; }
+}

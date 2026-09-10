@@ -1,0 +1,8 @@
+{
+  "//": "Not a package — a resolution stub. Toolchains that predate the `exports` field (webpack 4, CRA 4, TypeScript's `moduleResolution: node`) resolve `naksha/react` by looking for a directory at this path and reading the package.json inside it. They never see the root `exports` map, so without this file the subpath is simply unresolvable for them.",
+  "main": "../dist/react/index.cjs",
+  "module": "../dist/react/index.esm.js",
+  "browser": "../dist/react/index.esm.js",
+  "types": "../dist/react/index.d.ts",
+  "sideEffects": false
+}

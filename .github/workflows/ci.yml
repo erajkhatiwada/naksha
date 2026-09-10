@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    # Node 22.18+ is required to *develop* naksha: the repo runs its own
+    # TypeScript sources directly via native type stripping, with no build step
+    # for tools and tests. 22.18 is where stripping stopped needing
+    # --experimental-strip-types, and no script here passes that flag.
+    # Consumers have no such requirement — see `consumer`.
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # "22.18" is quoted and exact: it is the devEngines floor, so the
+        # documented number is a number CI actually runs. Quote any such pin —
+        # an unquoted YAML float would truncate a version like 22.10 to 22.1.
+        node: ["22.18", 22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm test
+      - run: npm run build
+
+  consumer:
+    # The published package is plain JavaScript, so it must run on the engines
+    # floor even though building it needs a newer Node. All three entry shapes
+    # are checked — import, require and the <script src> global — because each
+    # is resolved by a different mechanism and can rot on its own.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      # Declarations are shipped twice — .d.ts for `import`, .d.cts for
+      # `require` — and reached through four resolution modes that are all
+      # invisible to this repo's own `tsc --noEmit`.
+      - name: Typecheck a consumer in every module resolution mode
+        run: node tools/smoke-types.mjs
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+      - name: Import, require and script-load the built package on the oldest supported Node
+        run: node tools/smoke-dist.mjs
+
+  react:
+    # The peer range is >=16.14, which spans four majors of react-dom. Render
+    # on each rather than assuming that useEffect/useMemo/useRef is all it
+    # takes: old react-dom warns about props it does not recognise instead of
+    # throwing, so the failure mode is a map that renders subtly wrong.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        react: [16, 17, 18, 19]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      # --no-save keeps the peer range honest: nothing here can quietly become
+      # a real dependency of the package.
+      - run: npm install --no-save --no-package-lock react@${{ matrix.react }} react-dom@${{ matrix.react }}
+      - name: Server-render the React wrapper
+        run: node tools/smoke-react.mjs
+
+  artifacts:
+    # The shipped geometry must be reproducible from the upstream GeoJSON.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run fetch
+      - run: npm run data
+      - name: Fail if the generated geometry differs from the committed one
+        # Only src/generated is checked. data/*.png is a debug image whose
+        # compressed bytes vary with the platform's zlib build even when the
+        # pixels are identical; the RLE payload in src/generated is a direct
+        # function of those pixels, so it catches any real geometry drift.
+        run: git diff --exit-code -- src/generated

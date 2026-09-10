@@ -1,0 +1,13 @@
+node_modules/
+dist/
+site/dist/
+
+# Upstream GeoJSON downloads. Large, regenerable via `npm run data`.
+.cache/
+
+.DS_Store
+*.log
+
+# Local Claude Code state (settings.local.json, skills, transcripts).
+.claude/
+CLAUDE.md
