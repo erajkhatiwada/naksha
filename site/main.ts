@@ -1246,8 +1246,15 @@ function addCopyButtons() {
   for (const pre of document.querySelectorAll<HTMLElement>(".code-card pre")) {
     targets.push({ host: pre, source: pre.querySelector("code") ?? pre });
   }
+  // The span matters: the button is appended to the *host*, so a host that is
+  // also the source ends up with "Copy" inside the text being copied. The code
+  // cards avoid this for free because their button lands on <pre> while the
+  // text comes from <code>; the install chip needs an inner element to play the
+  // same role. It also keeps the "$ " prefix out of the clipboard, since that
+  // is a ::before on .install rather than a child of the span.
   const install = document.querySelector<HTMLElement>(".install");
-  if (install?.parentElement) targets.push({ host: install, source: install });
+  const command = install?.querySelector("span");
+  if (install && command) targets.push({ host: install, source: command });
 
   for (const { host, source } of targets) {
     host.classList.add("has-copy");
