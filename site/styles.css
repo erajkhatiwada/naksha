@@ -557,10 +557,22 @@ pre {
   border-radius: var(--radius);
   padding: 22px 0;
   overflow: hidden;
+  /* The scroller has to fill the pre, not just its own text. `.code-card pre`
+     is `flex: 1`, so a short sample's pre still stretches to whatever the
+     tallest card in that grid row needs — but the <code> inside it stopped at
+     its content, leaving its horizontal scrollbar stranded mid-panel. On
+     desktop the CommonJS pre is 531px against 245px of code: the bar sat 241px
+     above the bottom edge. */
+  display: flex;
+  flex-direction: column;
 }
 code { font-family: var(--mono); font-size: 13.5px; line-height: 1.7; }
 pre > code {
   display: block;
+  /* `1 0 auto`, not `1`: basis stays the content height, so a pre that is not
+     being stretched still sizes to its text. Grow fills a stretched one; no
+     shrink, so the code is never compressed into its own scrollbar. */
+  flex: 1 0 auto;
   overflow-x: auto;
   padding-inline: 22px;
   /* `code`'s own 1.7 was never what shipped. As an inline box its line boxes
