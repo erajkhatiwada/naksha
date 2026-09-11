@@ -243,6 +243,9 @@ section > * { max-width: var(--max); margin-inline: auto; }
   align-items: flex-end;
   margin-bottom: 22px;
 }
+/* Lets a control narrower than its content shrink onto the line rather than
+   overflowing it — a flex item's automatic minimum is its content's width. */
+.control { max-width: 100%; min-width: 0; }
 .control label {
   display: block;
   font-size: 12px;
@@ -287,8 +290,15 @@ section > * { max-width: var(--max); margin-inline: auto; }
    has nothing left to show. Dimming says so; a live control that did nothing
    would just look broken. */
 .control.is-off { opacity: 0.45; }
+/* `flex-wrap` is a safety valve, not a layout: it only engages where the
+   control genuinely cannot fit, which today is the four-button View control
+   (306px) at widths under ~330px (280px of content). Without it the control
+   pushed the whole page sideways instead. `max-width` is what lets the flex
+   item shrink to the line in the first place. */
 .segmented {
   display: inline-flex;
+  flex-wrap: wrap;
+  max-width: 100%;
   min-height: var(--control-h);
   background: var(--panel);
   border: 1px solid var(--line);
@@ -522,19 +532,45 @@ input[type="color"]:disabled { cursor: not-allowed; }
 .code-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; }
 /* Cards stretch and the <pre> fills the rest, so two samples of different
    lengths still bottom out on the same line rather than leaving one panel
-   floating short of its neighbour. */
-.code-card { display: flex; flex-direction: column; }
+   floating short of its neighbour.
+
+   `min-width: 0` is the load-bearing part. A grid item's automatic minimum
+   size is its *content's*, and the pre's overflow only makes the pre itself
+   shrinkable — the card wrapping it stays content-sized. So the 1fr track grew
+   to the longest code line and `overflow-x: auto` never engaged: at 390px the
+   card measured 591px and the whole page scrolled sideways instead of the
+   sample. Zero the minimum and the scrolling goes back where it belongs. */
+.code-card { display: flex; flex-direction: column; min-width: 0; }
 .code-card pre { flex: 1; }
 .code-grid h3 { font-size: 15px; color: var(--muted); font-weight: 520; margin-bottom: 10px; }
+/* The <code> scrolls, not the <pre>. An absolutely positioned child of a
+   scroll container scrolls *with* the content — the copy button drifted left
+   across the sample as soon as one was scrolled sideways, which is exactly
+   what happens on every phone. Demoting the pre to a plain clipping box keeps
+   the button anchored, and costs only moving the inline padding inward: the
+   scroller has to span the pre's full width, or the code would vanish 22px
+   before the border instead of running to it. */
 pre {
   margin: 0;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  padding: 22px;
-  overflow-x: auto;
+  padding: 22px 0;
+  overflow: hidden;
 }
 code { font-family: var(--mono); font-size: 13.5px; line-height: 1.7; }
+pre > code {
+  display: block;
+  overflow-x: auto;
+  padding-inline: 22px;
+  /* `code`'s own 1.7 was never what shipped. As an inline box its line boxes
+     were sized by the <pre>'s strut — monospace at 16.5px times the body's
+     1.65, or 27.225px — which is taller, so the strut won and 1.7 was dead.
+     Promoting the code to a block finally lets 1.7 apply, which would tighten
+     every sample from 27.22px per line to 22.94px: a 16% restyle smuggled in
+     under a layout fix. Restate the strut's value instead. */
+  line-height: 27.225px;
+}
 
 /* Copy buttons are injected by main.ts, so these rules only ever apply where
    the clipboard is actually available. `.has-copy` is set on the host at the
@@ -621,12 +657,36 @@ footer p { max-width: var(--max); margin: 0 auto 6px; }
   .cards, .code-grid { grid-template-columns: 1fr; }
   .strip { grid-template-columns: repeat(2, 1fr); }
   section { padding: 64px 20px; }
+  /* The nav and the footer set their own padding rather than inheriting the
+     section rule, so without this the wordmark and the footer text sit 8px
+     inside every other left edge on the page. */
+  .nav { padding-inline: 20px; }
+  footer { padding-inline: 20px; }
 }
 
 @media (max-width: 560px) {
   /* The 150px label column leaves too little for values like the TypeScript
      row, which then wraps to one word per line. Stack instead. */
   .support > div { grid-template-columns: 1fr; gap: 2px; }
+
+  /* The wordmark and five nav items measure 421px against 334px of usable
+     width at 390px, so the row overflowed the screen and carried the theme
+     toggle — the last item in it — clean off the right edge, with no way to
+     reach it. The three section anchors are the part that is pure convenience
+     on a page you scroll through anyway; the GitHub link and the toggle are
+     the two things a visitor cannot get to any other way, so they are what
+     stays. The row breaks below 477px measured; 560 is the nearest breakpoint
+     already in this file and leaves headroom for a wider wordmark. */
+  .nav nav a:not(.ghost) { display: none; }
+
+  /* Samples run to 67 characters and no phone fits that, so the sideways
+     scroll is a given — but a step down in type and padding is worth 4.6 more
+     characters before it starts: 37.4 per line to 42.0 at 390px, measured off
+     the live font rather than an assumed advance width. */
+  pre { padding: 18px 0; }
+  pre > code { padding-inline: 16px; }
+  .code-card pre.has-copy { padding-top: 40px; }
+  .code-card code { font-size: 12.5px; }
 }
 
 /* Reserves carry one line of headroom over the measured worst case at each
