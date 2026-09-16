@@ -28,6 +28,80 @@
           localStorage.getItem("naksha-theme") === "light" ? "light" : "dark";
       } catch (e) {}
     </script>
+    <!-- Google Analytics (GA4). The measurement ID is not a secret — gtag.js
+         needs it in the client, so it ships in this file either way and a build
+         variable would only hide it from the repo, not from the page.
+
+         Loaded behind a hostname allowlist rather than unconditionally: this
+         repo is MIT and is meant to be forked and run locally, so without the
+         guard every `npm run dev` and every fork's own Pages deploy would
+         report into this property. Appending the tag inside the guard (instead
+         of a static `<script async src>` plus a guarded config call) means a
+         dev server makes no request to googletagmanager at all. Add any custom
+         domain to HOSTS or the site goes silently untracked on it. -->
+    <script>
+      (function () {
+        var HOSTS = ["erajkhatiwada.github.io"];
+        var ID = "G-DY25BCL73S";
+        if (HOSTS.indexOf(location.hostname) === -1) return;
+        window.dataLayer = window.dataLayer || [];
+        window.gtag = function () { dataLayer.push(arguments); };
+
+        // Consent Mode v2. Every consent command below is queued *before* the
+        // tag is appended, and that ordering is the whole mechanism: gtag.js
+        // applies whatever consent state it finds in dataLayer on arrival, so a
+        // default declared afterwards would let the first pageview through
+        // unconsented — the one hit that matters most.
+        //
+        // The three ad_* signals are denied everywhere and never updated. There
+        // is no ads integration and the banner does not offer one, so there is
+        // nothing for a visitor to grant.
+        //
+        // EEA + UK + Switzerland get analytics_storage denied; everywhere else
+        // is granted. Denied is not "no data": GA4 falls back to cookieless
+        // pings, so European visits still count in aggregate without storage.
+        // That is what makes an EEA default safe to ship with no banner shown
+        // yet, and what a Decline leaves in place.
+        var EEA = ["AT","BE","BG","HR","CY","CZ","DK","EE","FI","FR","DE","GR",
+                   "HU","IE","IT","LV","LT","LU","MT","NL","PL","PT","RO","SK",
+                   "SI","ES","SE","IS","LI","NO","GB","CH"];
+        gtag("consent", "default", {
+          ad_storage: "denied",
+          ad_user_data: "denied",
+          ad_personalization: "denied",
+          analytics_storage: "denied",
+          region: EEA,
+        });
+        gtag("consent", "default", {
+          ad_storage: "denied",
+          ad_user_data: "denied",
+          ad_personalization: "denied",
+          analytics_storage: "granted",
+        });
+
+        // A stored choice overrides the regional default in both directions —
+        // an EEA visitor who accepted, and equally a non-EEA visitor who
+        // declined, which the region rule would otherwise have granted.
+        //
+        // Read synchronously here rather than waited for: the banner is the
+        // only writer and it is not a CMP, so there is no asynchronous lookup
+        // to hold the first hit for and `wait_for_update` would only add
+        // latency to every load.
+        try {
+          var saved = localStorage.getItem("naksha-consent");
+          if (saved === "granted" || saved === "denied") {
+            gtag("consent", "update", { analytics_storage: saved });
+          }
+        } catch (e) {}
+
+        gtag("js", new Date());
+        gtag("config", ID);
+        var s = document.createElement("script");
+        s.async = true;
+        s.src = "https://www.googletagmanager.com/gtag/js?id=" + ID;
+        document.head.appendChild(s);
+      })();
+    </script>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
@@ -490,6 +564,27 @@ if (d) console.log(d.name, d.nameNp); // Kathmandu काठमाडौँ</cod
       </p>
       <p><a href="https://github.com/erajkhatiwada/naksha">github.com/erajkhatiwada/naksha</a></p>
     </footer>
+
+    <!-- Consent banner, hidden here and revealed by main.ts only where it can
+         change something — see initConsent for the two conditions. Written as
+         markup rather than built in script so that it is in the DOM, styled and
+         sized before the bundle decides anything; the alternative injects a
+         560px card into a page the visitor is already reading.
+
+         `role="region"` with a label, not a dialog: it takes no focus and traps
+         none. It sits last in the document so it does not push the page's real
+         content down the tab order, and it is reachable straight after the
+         footer. -->
+    <div class="consent" id="consent" role="region" aria-label="Analytics consent" hidden>
+      <p>
+        naksha uses Google Analytics to count anonymous page views, to see
+        which examples people actually use. No ads, no profiling.
+      </p>
+      <div class="consent-actions">
+        <button type="button" class="consent-btn" id="consent-no">Decline</button>
+        <button type="button" class="consent-btn is-primary" id="consent-yes">Accept</button>
+      </div>
+    </div>
 
     <script type="module" src="./main.js"></script>
   </body>
