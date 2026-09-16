@@ -664,6 +664,72 @@ footer {
 }
 footer p { max-width: var(--max); margin: 0 auto 6px; }
 
+/* ------------------------------------------------------------- consent --- */
+/* Fixed, not in the flow. The banner is revealed after the bundle loads, and a
+   block appearing *in* the flow at that moment pushes everything below it down
+   under the pointer — the same feedback loop that put #hint above the stage
+   rather than below it. Fixed, it overlays and nothing reflows.
+
+   z-index 30 clears both the sticky nav and the finder's dropdown, which share
+   20. Anything less and the nav paints over a banner pinned to a short page. */
+.consent {
+  position: fixed;
+  z-index: 30;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: calc(100% - 36px);
+  max-width: 580px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px 18px;
+  padding: 16px 18px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  /* The page's own surfaces are flat, so the only thing separating a --panel
+     card from the --panel cards behind it is this shadow. */
+  box-shadow: 0 16px 40px rgb(0 0 0 / 0.38);
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+/* `hidden` needs restating here, and this is not belt-and-braces. The attribute
+   is `display: none` in the UA stylesheet, which *any* author `display` beats —
+   so `.consent { display: flex }` above silently un-hides the banner and the
+   markup's `hidden` attribute does nothing at all. Without this rule the banner
+   ships visible to every visitor in every region and stays up after a choice is
+   made, because the only thing initConsent ever does to dismiss it is set that
+   same attribute. Caught by a screenshot pass, not by reading the code. */
+.consent[hidden] { display: none; }
+
+:root[data-theme="light"] .consent { box-shadow: 0 16px 40px rgb(15 23 42 / 0.16); }
+
+/* Basis 240px, so the text keeps the buttons on its own row while there is room
+   for both and drops them beneath once there is not. */
+.consent p { margin: 0; flex: 1 1 240px; }
+.consent-actions { display: flex; gap: 8px; flex: 0 0 auto; margin-left: auto; }
+
+.consent-btn {
+  font: 500 13.5px var(--sans);
+  color: var(--muted);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px 16px;
+  cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease, filter 120ms ease;
+}
+.consent-btn:hover { color: var(--text); border-color: var(--muted); }
+.consent-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.consent-btn.is-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.consent-btn.is-primary:hover { color: #fff; filter: brightness(1.1); }
+
 @media (max-width: 900px) {
   .hero { grid-template-columns: 1fr; gap: 36px; }
   .cards, .code-grid { grid-template-columns: 1fr; }

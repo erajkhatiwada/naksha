@@ -1228,6 +1228,84 @@ $("#theme-toggle").addEventListener("click", () => {
   renderHero();
 });
 
+// ------------------------------------------------------------- consent ---
+
+declare global {
+  interface Window {
+    gtag?: (...args: unknown[]) => void;
+  }
+}
+
+/**
+ * Reveal the consent banner, but only where it can actually change something.
+ *
+ * Three conditions, and the third is the interesting one.
+ *
+ * The tag has to be live at all: `window.gtag` is undefined on localhost and on
+ * forks, where the head script's host allowlist never appends it, and asking
+ * consent for a tag that was never loaded is theatre.
+ *
+ * A stored choice ends it — the head script has already replayed that choice as
+ * a `consent update` before the first hit, so there is nothing left to ask.
+ *
+ * And the visitor has to be somewhere `analytics_storage` defaults to denied,
+ * which is the one thing this page cannot know. GA4 evaluates the head script's
+ * `region` list on its own side, from the IP; the client is never told the
+ * answer. The timezone is the closest it can get.
+ *
+ * So the heuristic decides whether a banner is *offered*. It decides nothing
+ * about what is *enforced* — GA4's region rule does that, server-side, and it
+ * does not consult this function. Both ways of being wrong are therefore
+ * survivable: a banner shown to someone outside the EEA who did not need one
+ * (they were already granted, and Accept is a no-op), or a European on an odd
+ * timezone who is never offered the upgrade and stays on cookieless pings.
+ * Compliance does not ride on a guess about time zones, which is the only
+ * reason a guess is acceptable here.
+ */
+function initConsent() {
+  const gtag = window.gtag;
+  if (!gtag) return;
+
+  const banner = $<HTMLElement>("#consent");
+
+  try {
+    const saved = localStorage.getItem("naksha-consent");
+    if (saved === "granted" || saved === "denied") return;
+  } catch {
+    /* private mode — ask again rather than assume either answer */
+  }
+
+  let zone = "";
+  try {
+    zone = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+  } catch {
+    /* no Intl data: fall through and offer the banner */
+  }
+  // Europe/* is the bulk of it, and over-covers with a few non-EEA zones
+  // (Europe/Moscow, Europe/Istanbul) — over-showing is the harmless direction.
+  // Atlantic/* carries real EEA territory: Reykjavik, the Canaries, Madeira and
+  // the Azores. Cyprus is the one that a prefix cannot reach, since tzdb files
+  // it under Asia despite EU membership.
+  const EEA_ZONES = ["Europe/", "Atlantic/", "Asia/Nicosia", "Asia/Famagusta"];
+  if (zone && !EEA_ZONES.some((z) => zone.startsWith(z))) return;
+
+  const decide = (state: "granted" | "denied") => () => {
+    gtag("consent", "update", { analytics_storage: state });
+    try {
+      localStorage.setItem("naksha-consent", state);
+    } catch {
+      /* private mode — the choice still holds for this page view */
+    }
+    banner.hidden = true;
+  };
+
+  $("#consent-yes").addEventListener("click", decide("granted"));
+  $("#consent-no").addEventListener("click", decide("denied"));
+  banner.hidden = false;
+}
+
+initConsent();
+
 // ------------------------------------------------------------ copy code ---
 
 /**
