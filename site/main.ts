@@ -1387,6 +1387,11 @@ function renderHero() {
     points: [KTM, ...HUBS],
     lang: state.lang,
     animate: true,
+    // Two maps share this page, and both number their routes from r0 — so
+    // without a prefix of its own the hero's route ids collide with the
+    // stage's. Nothing renders off the ids any more, but duplicate ids in a
+    // document are still invalid and still break anything that looks one up.
+    idPrefix: "hero-",
     title: "Routes radiating from Kathmandu",
   });
 }

@@ -377,6 +377,24 @@ describe("svg", () => {
     assert.match(svg, /prefers-reduced-motion/);
   });
 
+  test("a pulse carries its own path, so two maps on a page cannot swap them", () => {
+    // An `<mpath href="#id">` resolves document-wide, and two maps number their
+    // routes from r0 under the same prefix — so the second map's pulses would
+    // follow the first map's geometry, in a viewBox that is not theirs.
+    const opts = { routes: [{ stops: [ktm, pkr] }], animate: true };
+    const svg = renderNepal(opts);
+    assert.doesNotMatch(svg, /<mpath/, "no cross-document id reference");
+    const motion = svg.match(/<animateMotion[^>]*path="([^"]+)"/);
+    assert.ok(motion, "the pulse carries the arc inline");
+    assert.ok(
+      svg.includes(`<path id="naksha-r0" class="naksha-route naksha-reveal" pathLength="1" d="${motion[1]}"`),
+      "and it is the same arc the route is drawn with",
+    );
+    // The geometry is per-viewport, so a second map's pulse must differ.
+    const zoomed = renderNepal({ ...opts, bbox: VIEWS.madhesh });
+    assert.notStrictEqual(zoomed.match(/<animateMotion[^>]*path="([^"]+)"/)![1], motion[1]);
+  });
+
   test("collapses the dot field into a couple of nodes by default", () => {
     const svg = renderNepal({});
     const circles = (svg.match(/<circle/g) ?? []).length;
