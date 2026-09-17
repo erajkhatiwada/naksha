@@ -459,6 +459,10 @@ anchor with the district's name, not a town's.
 - `animate` — reveal routes with a dash animation and send a pulse along them.
   Respects `prefers-reduced-motion`. Static output (the default) draws complete
   routes, so server-side rasterization and print both work.
+- `idPrefix` (default `"naksha-"`) — prefixes the id on each route element, so
+  routes come out as `naksha-r0`, `naksha-r1`, … in source order. Give every
+  map on a page its own prefix: ids are document-wide, so two maps left on the
+  default emit the same ones.
 
 ---
 
