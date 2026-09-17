@@ -542,13 +542,22 @@ function renderRoutes(grid: Grid, theme: Theme, options: RenderOptions, prefix: 
       // the opacity at 0s while the motion is still waiting its turn and the
       // pulse spends the delay parked at the untranslated origin, drawing a
       // stack of stray dots in the corner until each one's motion starts.
+      //
+      // The path is written out again here rather than referenced with
+      // `<mpath href="#id">`. An id reference resolves against the *document*,
+      // not the enclosing <svg>, so two maps on one page — each numbering its
+      // routes from r0 under the same `idPrefix` — would send every pulse in
+      // the second map along the first map's geometry. Those two maps rarely
+      // share a viewBox, so the pulses drift across the frame with no route
+      // under them. Repeating a short arc costs a few dozen bytes; not
+      // repeating it makes correctness depend on what else is on the page.
       const delay = `${(i * 0.4).toFixed(1)}s`;
       parts.push(
         `<circle class="naksha-pulse" r="${fmt(theme.pinRadius * 0.5)}" fill="${esc(stroke)}"` +
           ` opacity="0">` +
           `<set attributeName="opacity" to="1" begin="${delay}"/>` +
-          `<animateMotion dur="3s" repeatCount="indefinite" begin="${delay}">` +
-          `<mpath href="#${id}"/></animateMotion></circle>`,
+          `<animateMotion dur="3s" repeatCount="indefinite" begin="${delay}"` +
+          ` path="${d}"/></circle>`,
       );
     }
   });
