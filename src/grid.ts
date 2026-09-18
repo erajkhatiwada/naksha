@@ -325,6 +325,28 @@ export function project(grid: Grid, p: LngLat): { x: number; y: number } {
   };
 }
 
+/**
+ * SVG coordinates -> geographic point, the exact inverse of `project`.
+ *
+ * Unquantised on purpose: `hitTest` answers *which dot* was hit, which is the
+ * right question for a hover readout, and this answers *where* the pointer
+ * actually is, which is the right one for a gesture that moves the viewport.
+ * Rounding a zoom-at-cursor to the nearest dot centre would drift the map by up
+ * to half a cell — 5.7 km at the national view — on every step.
+ *
+ * ```ts
+ * const at = eventPoint(svg, event);
+ * if (at) setView(zoomBbox(view, 2, { center: unproject(grid, at.x, at.y) }));
+ * ```
+ */
+export function unproject(grid: Grid, x: number, y: number): LngLat {
+  const { bbox, cols, rows } = grid;
+  return {
+    lng: bbox.lo + (x / cols) * (bbox.hi - bbox.lo),
+    lat: bbox.ha - (y / rows) * (bbox.ha - bbox.la),
+  };
+}
+
 /** SVG coordinates of a dot's centre. */
 export function dotCenter(dot: Dot): { x: number; y: number } {
   return { x: dot.col + 0.5, y: dot.row + 0.5 };

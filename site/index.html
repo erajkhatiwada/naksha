@@ -180,7 +180,14 @@
         </ul>
       </div>
 
+      <!-- Grouped rather than one flat strip: fourteen controls in a row runs
+           816px tall on a 390px screen, which is taller than the screen. The
+           groups are <details> so the same markup is four headed sections on a
+           wide screen and four accordions on a narrow one. -->
       <div class="controls" role="group" aria-label="Demo controls">
+        <details class="control-group" open>
+          <summary><span class="group-name">Map</span><span class="group-blurb">What the map is showing</span></summary>
+          <div class="group-body">
         <div class="control">
           <label>View</label>
           <div class="segmented" id="mode">
@@ -191,8 +198,40 @@
           </div>
         </div>
         <div class="control">
+          <label>Labels</label>
+          <div class="segmented" id="lang">
+            <button data-lang="en" class="on">English</button>
+            <button data-lang="np" lang="ne">नेपाली</button>
+          </div>
+        </div>
+        <div class="control" id="place-control">
+          <label for="placement">Label placement</label>
+          <select id="placement">
+            <option value="above">Above the pin (default)</option>
+            <option value="avoid-region">Avoid its district</option>
+            <option value="clear">Clear of all dots</option>
+            <option value="none">No labels</option>
+          </select>
+        </div>
+        <div class="control" id="context-control">
+          <label>District context</label>
+          <div class="segmented" id="context">
+            <button data-context="on">On</button>
+            <button data-context="off" class="on">Off</button>
+          </div>
+        </div>
+          </div>
+        </details>
+        <details class="control-group" open>
+          <summary><span class="group-name">Viewport</span><span class="group-blurb">Where it is looking</span></summary>
+          <div class="group-body">
+        <div class="control">
           <label for="view">Viewport</label>
           <select id="view">
+            <!-- Selected by script once zooming has taken the box off the
+                 ladder, and hidden from the list because picking it by hand
+                 would mean nothing. -->
+            <option value="custom" hidden>Custom</option>
             <optgroup label="Country">
               <option value="nepal">Nepal — 11.4 km/dot</option>
             </optgroup>
@@ -208,6 +247,36 @@
           </select>
         </div>
         <div class="control">
+          <label>Zoom</label>
+          <div class="segmented" id="zoom">
+            <button data-zoom="out" aria-label="Zoom out" title="Zoom out">&minus;</button>
+            <button data-zoom="in" aria-label="Zoom in" title="Zoom in">+</button>
+            <button data-zoom="reset">Reset</button>
+          </div>
+        </div>
+        <div class="control">
+          <label>Overview</label>
+          <div class="segmented" id="overview">
+            <button data-overview="always" class="on">Always</button>
+            <button data-overview="zoomed">When zoomed</button>
+            <button data-overview="off">Off</button>
+          </div>
+        </div>
+        <div class="control">
+          <label for="corner">Corner</label>
+          <select id="corner">
+            <option value="top-right">Top right</option>
+            <option value="top-left">Top left</option>
+            <option value="bottom-right">Bottom right</option>
+            <option value="bottom-left">Bottom left</option>
+          </select>
+        </div>
+          </div>
+        </details>
+        <details class="control-group" open>
+          <summary><span class="group-name">Interaction</span><span class="group-blurb">How it answers the pointer</span></summary>
+          <div class="group-body">
+        <div class="control">
           <label>Interaction</label>
           <div class="segmented" id="interact">
             <button data-interact="hover" class="on">Hover</button>
@@ -222,29 +291,11 @@
             <button data-highlight="region">District</button>
           </div>
         </div>
-        <div class="control">
-          <label>Labels</label>
-          <div class="segmented" id="lang">
-            <button data-lang="en" class="on">English</button>
-            <button data-lang="np" lang="ne">नेपाली</button>
           </div>
-        </div>
-        <div class="control" id="context-control">
-          <label>District context</label>
-          <div class="segmented" id="context">
-            <button data-context="on">On</button>
-            <button data-context="off" class="on">Off</button>
-          </div>
-        </div>
-        <div class="control" id="place-control">
-          <label for="placement">Label placement</label>
-          <select id="placement">
-            <option value="above">Above the pin (default)</option>
-            <option value="avoid-region">Avoid its district</option>
-            <option value="clear">Clear of all dots</option>
-            <option value="none">No labels</option>
-          </select>
-        </div>
+        </details>
+        <details class="control-group" open>
+          <summary><span class="group-name">Colours</span><span class="group-blurb">Every layer is a theme prop</span></summary>
+          <div class="group-body">
         <div class="control" id="dot-control">
           <!-- The reset is a sibling of the label, never a child: a <button>
                inside a <label for> still triggers the label, so clicking it
@@ -273,6 +324,8 @@
           </div>
           <input type="color" id="leader-color" />
         </div>
+          </div>
+        </details>
       </div>
 
       <div class="finder" id="finder" hidden>
@@ -297,7 +350,23 @@
            moves the focus, this says where to. -->
       <p class="hint" id="hint" aria-live="polite"></p>
 
-      <figure class="stage" id="stage"></figure>
+      <!-- The minimap is a sibling of the stage, not a child: `render` writes
+           the map with `stage.innerHTML = svg`, and anything inside would be
+           thrown away on the next frame. -->
+      <div class="stage-wrap">
+        <figure class="stage" id="stage"></figure>
+        <div class="minimap at-top-right" id="minimap" hidden>
+          <!-- The map lives in its own child: the SVG is replaced wholesale on
+               every render, so the drag listeners hang off the stable wrapper
+               instead and keep their pointer capture across frames. -->
+          <div class="minimap-map" id="minimap-map"></div>
+          <div class="minimap-zoom" id="minimap-zoom">
+            <button data-zoom="out" aria-label="Zoom out" title="Zoom out">&minus;</button>
+            <button data-zoom="in" aria-label="Zoom in" title="Zoom in">+</button>
+            <button data-zoom="reset" title="Back to the whole country">Reset</button>
+          </div>
+        </div>
+      </div>
 
       <div class="readout" id="readout"></div>
     </section>

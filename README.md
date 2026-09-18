@@ -204,6 +204,162 @@ nationally and 221 across the valley. Reach for it when the pins are the subject
 and the dot field is texture — just don't expect a recognisable Nepal behind
 them. `npm run verify` prints the fill and edge-dot columns this rests on.
 
+### Zoom is arithmetic on that box, and an overview map is a second render
+
+Because a viewport *is* a box, zooming is arithmetic on the box rather than a
+transform on the output. `zoomBbox(bbox, factor)` scales one about a point —
+`factor > 1` in, `< 1` out — and returns another box to pass straight back as
+`bbox`:
+
+```ts
+let view = NEPAL_BBOX;
+zoomIn.onclick = () => { view = zoomBbox(view, 2); draw(); };
+zoomOut.onclick = () => { view = zoomBbox(view, 0.5); draw(); };
+
+const draw = () => (el.innerHTML = renderNepal({ bbox: view, points }));
+```
+
+It is bounded at both ends, so a `+` button cannot walk off the map. Zooming out
+is capped by the national frame; zooming in stops at `MIN_ZOOM_SPAN` — 0.32° of
+longitude, which is where the raster runs out. At that width one dot covers one
+raster cell, **0.447 km/dot against 0.447 km/cell**, and narrower just upsamples
+the bitmap. Both spans scale together, so the box keeps its shape and the map is
+never stretched. `clampBbox` is the same containment on its own, for a pan.
+
+| Step | lng span | dots | km/dot | districts | cells/dot |
+| ---- | -------- | ----- | ------ | --------- | --------- |
+| 0 | 8.16° | 1,130 | 11.401 | 77 | 25.5 |
+| 1 | 4.08° | 1,995 | 5.701 | 42 | 12.8 |
+| 2 | 2.04° | 2,547 | 2.851 | 18 | 6.4 |
+| 3 | 1.02° | 2,800 | 1.425 | 9 | 3.2 |
+| 4 | 0.51° | 2,800 | 0.713 | 3 | 1.6 |
+| 5 | 0.32° | 2,800 | 0.447 | 3 | 1.0 |
+
+Ground resolution moves 25× down that ladder while the dot count moves 2.5× and
+then stops. Step 5 is the floor — further presses return the same box, and a
+full ladder in and back out lands on the frame to within 2×10⁻⁸ m.
+
+**There are two ways to put an overview on the page**, and which one you want
+depends on whether it has to be interactive.
+
+### Inset it into the map — one option, one SVG
+
+The two options are named apart because they are the halves of the same pair and
+are otherwise easy to confuse: **`viewport` is for a map that *is* the overview**
+and draws the window for some other view, while **`inset` is for the detail map**
+and puts the whole overview inside it.
+
+```ts
+renderNepal({ bbox: view, routes, inset: { corner: "top-right" } });
+```
+
+`corner` takes any of the four. `size` is its width as a fraction of the map's
+own (default 0.22), `margin` the gap from the edges in dot units (default 1),
+`height` its own dot budget (default 12, about 105 dots), and `bbox` what it
+covers (default the whole country). The window is drawn only when the map is
+looking at a sub-region — at full extent there is nothing to mark, so you get
+the silhouette alone. `inset: true` accepts every default.
+
+Everything lands in the one string, so it survives being written to a file,
+emailed, printed or server-rendered, with no second element to position and no
+CSS. The React component takes the same prop.
+
+Two things to know. The inset paints a panel behind itself so the map's own dots
+don't show through, using the theme background — **if that is `"transparent"`,
+as it is whenever the map is drawn straight onto a page, pass
+`inset: { background: "#fff" }` or the inset is see-through.** And it forces
+`edgeFade: 0`, because fading partly-covered cells softens a border at 40 rows
+but at 12 rows most of the country *is* edge and the same rule washes the
+silhouette away; `inset: { theme: { edgeFade: 1 } }` puts it back.
+
+### Or render a second map and place it yourself
+
+Reach for this when the overview has to be dragged, clicked, or given its own
+controls — that needs a DOM this renderer deliberately doesn't touch. Pass the
+detail view's box as `viewport` and you get a window drawn on it:
+
+```ts
+const overview = renderNepal({ height: 14, viewport: view });
+```
+
+That is 140 dots over 24 × 14 — a locator, not a second map. Nothing links the
+two: `viewport` only draws a rectangle where it is told, clipped to the frame,
+and omitted entirely when the two boxes do not overlap. It is themed through
+`viewport`, `viewportWidth` and `viewportOpacity`.
+
+**Where it goes is then entirely yours.** naksha hands back an SVG string (or,
+in React, an element) and has no opinion about the DOM around it — corner
+overlay, sidebar, above the map, a separate panel, two at once. The demo pins it
+to a corner with four lines of CSS and offers all four from a control; that is
+the demo's choice, not the library's.
+
+Showing it is the same kind of decision, and it is two decisions rather than
+one — whether to render the overview, and whether to draw the window on it:
+
+```ts
+const zoomed = view.hi - view.lo < NEPAL_BBOX.hi - NEPAL_BBOX.lo;
+
+// Always on screen, window only once there is a sub-region to mark.
+if (show === "always" || (show === "zoomed" && zoomed)) {
+  host.innerHTML = renderNepal({
+    height: 14,
+    viewport: zoomed ? view : undefined,
+  });
+}
+```
+
+Keep those apart. Passing `viewport` at full extent draws a rectangle around the
+entire country and washes the map underneath in the window's tint — a border
+that marks nothing. Leaving the overview itself on screen at full extent is
+worth it, though: it is what the reader orients against, and what they drag to
+move. The demo's **Overview** control switches between `always`, `when zoomed`
+and `off` (deep-linkable as `?overview=`), and defaults to always.
+
+To zoom to a district rather than a point, `districtBbox(id)` gives its bounds,
+exact to one raster cell. Two of the 77 are narrower than the zoom floor once
+padded for breathing room — Bhaktapur at 0.209° and Lalitpur at 0.255° — so open
+those out instead of framing them exactly.
+
+For gestures the built-in callbacks don't cover, `eventPoint(svg, event)`
+converts a pointer event to viewBox coordinates and `unproject(grid, x, y)`
+takes those back to a coordinate. That pair is the whole of a double-click to
+zoom, or a click on the overview to recentre:
+
+```ts
+const moveTo = (to) => {
+  const w = (view.hi - view.lo) / 2;
+  const h = (view.ha - view.la) / 2;
+  view = clampBbox({ lo: to.lng - w, hi: to.lng + w, la: to.lat - h, ha: to.lat + h });
+  draw();
+};
+
+host.addEventListener("pointerdown", (e) => {
+  const svg = host.querySelector("svg");           // re-query: see below
+  const at = svg && eventPoint(svg, e);
+  if (!at) return;
+  host.setPointerCapture(e.pointerId);
+  moveTo(unproject(overviewGrid, at.x, at.y));
+});
+```
+
+Two things to know if you make that overview draggable:
+
+- **Re-render replaces the SVG node.** If you redraw by assigning `innerHTML`,
+  the old `<svg>` is detached and its `getScreenCTM()` returns null — so a drag
+  that captured the pointer on the SVG dies after one move. Hang the listeners
+  on a stable wrapper and re-query the SVG inside it, as above.
+- **Throttle to `requestAnimationFrame`.** A pointer fires faster than the
+  screen refreshes. A full viewport change — grid, SVG and interaction layer —
+  measures 2.5 ms median in the browser, so it fits a frame comfortably, but a
+  60-move burst unthrottled is 60 renders where one will do. Coalescing to one
+  per frame turns exactly that burst into a single render.
+
+Set `touch-action: none` on the wrapper too, or a touch drag scrolls the page
+instead of moving the viewport.
+
+`npm run verify` prints the ladder, the floor and the district-bounds figures
+above.
+
 ### Clustering is the core primitive
 
 At the national view one dot covers ~130 km², so a delivery operator's entire
@@ -361,6 +517,14 @@ no `Image`, no canvas, no `fetch` and no top-level await.
 | `Region.hqAt` | Where a district's headquarters is, for 74 of the 77 |
 | `pickLabel` / `bothLabels` / `regionName` | Bilingual label helpers |
 | `arcPath` / `arcHeight` / `routePath` | Arc geometry |
+| `zoomBbox(bbox, factor, opts?)` | Scale a viewport about a point, bounded by the frame and the raster's resolution |
+| `clampBbox(bbox, limit?)` | Slide a box back inside the frame, shrinking only if it cannot fit |
+| `districtBbox(id)` | A district's bounds — the box to zoom to when one is picked |
+| `unproject(grid, x, y)` | viewBox coordinates back to `{ lng, lat }` — the inverse of `project` |
+| `eventPoint(svg, event)` | A pointer event in viewBox coordinates, for gestures you wire yourself |
+| `viewportRect(grid, bbox)` | Where a viewport lands on a grid, clipped — the geometry behind `viewport` |
+| `renderInset(grid, theme, opts?)` | The inset layer on its own, as a `<g>` |
+| `MIN_ZOOM_SPAN` | 0.32°, the narrowest box `zoomBbox` will produce |
 | `VIEWS` | The country and its seven provinces, as bounding boxes |
 | `lightTheme` / `darkTheme` | Theme presets |
 | `placeParts(point, lang?)` | The pieces of a place's name: its own, district, province, HQ, p-code |
@@ -459,6 +623,13 @@ anchor with the district's name, not a town's.
 - `animate` — reveal routes with a dash animation and send a pulse along them.
   Respects `prefers-reduced-motion`. Static output (the default) draws complete
   routes, so server-side rasterization and print both work.
+- `viewport` — draw a rectangle showing where another view is looking, for a
+  map that *is* an overview. Clipped to the frame, and skipped when the two
+  boxes miss each other entirely. Themed through `viewport`, `viewportWidth`
+  and `viewportOpacity`.
+- `inset` — the other half of the pair: put a miniature of the country into a
+  corner of *this* map, window and all. `true` for the defaults, or
+  `{ corner, size, margin, height, bbox, background, theme }`. See above.
 - `idPrefix` (default `"naksha-"`) — prefixes the id on each route element, so
   routes come out as `naksha-r0`, `naksha-r1`, … in source order. Give every
   map on a page its own prefix: ids are document-wide, so two maps left on the

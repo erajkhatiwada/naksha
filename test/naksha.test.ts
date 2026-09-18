@@ -35,6 +35,14 @@ import {
   renderSvg,
   placeParts,
   describePlace,
+  clampBbox,
+  zoomBbox,
+  renderInset,
+  lightTheme,
+  districtBbox,
+  bboxSizeKm,
+  NEPAL_BBOX,
+  MIN_ZOOM_SPAN,
   type LabelPlacement,
 } from "../src/index.ts";
 
@@ -1419,5 +1427,340 @@ describe("dot-level hover events", () => {
 
     assert.deepEqual(dots, [`${a.col},${a.row}`, `${b.col},${b.row}`]);
     assert.equal(regions, 1);
+  });
+});
+
+describe("clamping a viewport to the frame", () => {
+  const span = (b: { lo: number; hi: number }) => b.hi - b.lo;
+  const aspect = (b: { lo: number; hi: number; la: number; ha: number }) =>
+    (b.hi - b.lo) / (b.ha - b.la);
+
+  test("a box already inside is returned as it was", () => {
+    const box = { lo: 84, hi: 85, la: 27, ha: 28 };
+    assert.deepEqual(clampBbox(box), box);
+  });
+
+  test("a box hanging off the edge slides back in at the same size", () => {
+    const box = { lo: 87.5, hi: 89.5, la: 30, ha: 31 };
+    const clamped = clampBbox(box);
+    assert.equal(span(clamped), span(box));
+    assert.equal(clamped.hi, NEPAL_BBOX.hi);
+    assert.equal(clamped.ha, NEPAL_BBOX.ha);
+    assert.ok(clamped.lo >= NEPAL_BBOX.lo);
+  });
+
+  test("a box larger than the frame shrinks uniformly rather than squashing", () => {
+    const box = { lo: 70, hi: 100, la: 20, ha: 35 };
+    const clamped = clampBbox(box);
+    assert.ok(Math.abs(aspect(clamped) - aspect(box)) < 1e-9);
+    assert.ok(span(clamped) <= span(NEPAL_BBOX) + 1e-9);
+    assert.ok(clamped.ha - clamped.la <= NEPAL_BBOX.ha - NEPAL_BBOX.la + 1e-9);
+  });
+});
+
+describe("zooming a viewport", () => {
+  const span = (b: { lo: number; hi: number }) => b.hi - b.lo;
+  const inFrame = (b: { lo: number; hi: number; la: number; ha: number }) =>
+    b.lo >= NEPAL_BBOX.lo - 1e-9 &&
+    b.hi <= NEPAL_BBOX.hi + 1e-9 &&
+    b.la >= NEPAL_BBOX.la - 1e-9 &&
+    b.ha <= NEPAL_BBOX.ha + 1e-9;
+  /** Scaling about a point is four multiplications, so results land a few ulps
+   *  off a round number. Compared to a tolerance far tighter than a metre. */
+  const sameBox = (
+    a: { lo: number; hi: number; la: number; ha: number },
+    b: { lo: number; hi: number; la: number; ha: number },
+    message?: string,
+  ) => {
+    for (const k of ["lo", "hi", "la", "ha"] as const) {
+      assert.ok(Math.abs(a[k] - b[k]) < 1e-9, `${message ?? "box"}: ${k} differs`);
+    }
+  };
+
+  test("factor 2 halves the span about the centre", () => {
+    const box = { lo: 84, hi: 86, la: 27, ha: 28 };
+    const zoomed = zoomBbox(box, 2);
+    assert.ok(Math.abs(span(zoomed) - 1) < 1e-9);
+    assert.ok(Math.abs((zoomed.lo + zoomed.hi) / 2 - 85) < 1e-9);
+    assert.ok(Math.abs((zoomed.la + zoomed.ha) / 2 - 27.5) < 1e-9);
+  });
+
+  test("a centre is held still, so zoom-at-cursor keeps that point put", () => {
+    const box = { lo: 84, hi: 86, la: 27, ha: 28 };
+    const center = { lng: 84.5, lat: 27.25 };
+    const zoomed = zoomBbox(box, 4, { center });
+    // Same fractional position across the box before and after.
+    const before = (center.lng - box.lo) / span(box);
+    const after = (center.lng - zoomed.lo) / span(zoomed);
+    assert.ok(Math.abs(before - after) < 1e-9);
+  });
+
+  test("zooming in stops at the raster's own resolution", () => {
+    let box = NEPAL_BBOX as { lo: number; hi: number; la: number; ha: number };
+    for (let i = 0; i < 20; i++) box = zoomBbox(box, 2);
+    assert.ok(Math.abs(span(box) - MIN_ZOOM_SPAN) < 1e-9);
+    // Held there rather than creeping: another step changes nothing.
+    sameBox(zoomBbox(box, 2), box);
+  });
+
+  test("a box already below the floor can still zoom out", () => {
+    const tight = { lo: 85.3, hi: 85.4, la: 27.65, ha: 27.7 };
+    sameBox(zoomBbox(tight, 2), tight, "refuses to go further in");
+    assert.ok(span(zoomBbox(tight, 0.5)) > span(tight), "but still opens up");
+  });
+
+  test("zooming out is capped by the frame and never leaves it", () => {
+    let box = { lo: 85.3, hi: 85.6, la: 27.6, ha: 27.75 };
+    for (let i = 0; i < 20; i++) {
+      box = zoomBbox(box, 0.5);
+      assert.ok(inFrame(box), `left the frame at step ${i}`);
+    }
+    assert.ok(Math.abs(span(box) - span(NEPAL_BBOX)) < 1e-9);
+  });
+
+  test("a full zoom ladder in and back out returns the frame", () => {
+    let box = NEPAL_BBOX as { lo: number; hi: number; la: number; ha: number };
+    for (let i = 0; i < 9; i++) box = zoomBbox(box, 2);
+    for (let i = 0; i < 9; i++) box = zoomBbox(box, 0.5);
+    sameBox(box, NEPAL_BBOX, "round trip");
+  });
+
+  test("the box keeps its shape zooming into a corner, where the clamp bites", () => {
+    const start = (NEPAL_BBOX.hi - NEPAL_BBOX.lo) / (NEPAL_BBOX.ha - NEPAL_BBOX.la);
+    let box = NEPAL_BBOX as { lo: number; hi: number; la: number; ha: number };
+    for (let i = 0; i < 12; i++) {
+      box = zoomBbox(box, 1.6, { center: { lng: NEPAL_BBOX.hi, lat: NEPAL_BBOX.ha } });
+      assert.ok(inFrame(box), `left the frame at step ${i}`);
+      assert.ok(Math.abs((box.hi - box.lo) / (box.ha - box.la) - start) < 1e-9, "aspect drifted");
+    }
+  });
+
+  test("a custom limit is honoured over the national frame", () => {
+    const limit = { lo: 85, hi: 86, la: 27, ha: 28 };
+    const box = zoomBbox({ lo: 85.4, hi: 85.6, la: 27.4, ha: 27.6 }, 0.01, { limit });
+    sameBox(box, limit);
+  });
+});
+
+describe("district bounds", () => {
+  test("every district has one, and it holds that district's HQ", () => {
+    let withBox = 0;
+    let checked = 0;
+    for (const d of DISTRICTS) {
+      const box = districtBbox(d.id);
+      if (!box) continue;
+      withBox++;
+      if (!d.hqAt) continue;
+      checked++;
+      assert.ok(
+        d.hqAt.lng >= box.lo && d.hqAt.lng <= box.hi && d.hqAt.lat >= box.la && d.hqAt.lat <= box.ha,
+        `${d.name} HQ falls outside its own bounds`,
+      );
+    }
+    assert.equal(withBox, DISTRICTS.length);
+    assert.ok(checked > 70, "expected most HQs to carry a coordinate");
+  });
+
+  test("the box contains the district's own dots and is smaller than the frame", () => {
+    const ktm = districtByName("Kathmandu")!;
+    const box = districtBbox(ktm.id)!;
+    const grid = nepalGrid();
+    for (const dot of grid.dots) {
+      if (dot.region !== ktm.id) continue;
+      // The dot's own coordinate is its cell centre at the national view, which
+      // can sit up to half a cell outside a district it only mostly covers.
+      const slack = grid.kmPerDot / 111;
+      assert.ok(dot.lng >= box.lo - slack && dot.lng <= box.hi + slack);
+      assert.ok(dot.lat >= box.la - slack && dot.lat <= box.ha + slack);
+    }
+    const size = bboxSizeKm(box);
+    assert.ok(size.width < 60 && size.height < 60, `Kathmandu box is ${size.width}x${size.height} km`);
+  });
+
+  test("an id no district carries has no bounds", () => {
+    assert.equal(districtBbox(OUTSIDE), undefined);
+    assert.equal(districtBbox(250), undefined);
+  });
+});
+
+describe("the viewport rectangle on an overview map", () => {
+  const overview = () => buildGrid(nepalRaster(), { bbox: NEPAL_BBOX, height: 14 });
+  const rectOf = (svg: string) => svg.match(/<rect class="naksha-viewport"[^>]*\/>/)?.[0];
+  const attr = (rect: string, name: string) =>
+    Number(rect.match(new RegExp(`${name}="([-0-9.]+)"`))![1]);
+
+  test("nothing is drawn unless a viewport is asked for", () => {
+    assert.equal(rectOf(renderSvg(overview(), {})), undefined);
+  });
+
+  test("it lands where the box projects to", () => {
+    const grid = overview();
+    const box = { lo: 84.05, hi: 88.21, la: 28.34, ha: 30.45 };
+    const rect = rectOf(renderSvg(grid, { viewport: box }))!;
+    const nw = project(grid, { lng: box.lo, lat: box.ha });
+    const se = project(grid, { lng: box.hi, lat: box.la });
+    assert.ok(Math.abs(attr(rect, "x") - nw.x) < 0.01);
+    assert.ok(Math.abs(attr(rect, "y") - nw.y) < 0.01);
+    assert.ok(Math.abs(attr(rect, "width") - (se.x - nw.x)) < 0.01);
+    assert.ok(Math.abs(attr(rect, "height") - (se.y - nw.y)) < 0.01);
+  });
+
+  test("the whole frame fills the overview exactly", () => {
+    const grid = overview();
+    const rect = rectOf(renderSvg(grid, { viewport: NEPAL_BBOX }))!;
+    assert.equal(attr(rect, "x"), 0);
+    assert.equal(attr(rect, "y"), 0);
+    assert.equal(attr(rect, "width"), grid.cols);
+    assert.equal(attr(rect, "height"), grid.rows);
+  });
+
+  test("a viewport reaching past the overview is clipped to it", () => {
+    const grid = buildGrid(nepalRaster(), { bbox: { lo: 84, hi: 86, la: 27, ha: 28 }, height: 14 });
+    const rect = rectOf(renderSvg(grid, { viewport: NEPAL_BBOX }))!;
+    assert.equal(attr(rect, "x"), 0);
+    assert.equal(attr(rect, "width"), grid.cols);
+    assert.equal(attr(rect, "height"), grid.rows);
+  });
+
+  test("a viewport with no overlap draws nothing at all", () => {
+    const west = buildGrid(nepalRaster(), { bbox: { lo: 80.05, hi: 82, la: 26.34, ha: 28 } });
+    const east = districtBbox(districtByName("Taplejung")!.id)!;
+    assert.equal(rectOf(renderSvg(west, { viewport: east })), undefined);
+  });
+
+  test("the tint is themeable, and zero opacity leaves the window hollow", () => {
+    const grid = overview();
+    const tinted = rectOf(renderSvg(grid, { viewport: VIEWS.bagmati, theme: { viewport: "#ff0000" } }))!;
+    assert.match(tinted, /stroke="#ff0000"/);
+    assert.match(tinted, /fill="#ff0000"/);
+    const hollow = rectOf(
+      renderSvg(grid, { viewport: VIEWS.bagmati, theme: { viewportOpacity: 0 } }),
+    )!;
+    assert.match(hollow, /fill="none"/);
+    assert.doesNotMatch(hollow, /fill-opacity/);
+  });
+
+  test("it sits above the dots and below the pins", () => {
+    const grid = overview();
+    const svg = renderSvg(grid, {
+      viewport: VIEWS.bagmati,
+      points: [{ lng: 85.3, lat: 27.7 }],
+    });
+    assert.ok(svg.indexOf("naksha-dots") < svg.indexOf("naksha-viewport"));
+    assert.ok(svg.indexOf("naksha-viewport") < svg.indexOf("naksha-pins"));
+  });
+});
+
+describe("the inset", () => {
+  const detail = () => buildGrid(nepalRaster(), { bbox: VIEWS.bagmati });
+  const groupOf = (svg: string) => {
+    const at = svg.indexOf('<g class="naksha-inset"');
+    if (at === -1) return undefined;
+    // The inset is the last group in the document, so the tail is all of it.
+    return svg.slice(at);
+  };
+  const transform = (g: string) =>
+    g.match(/transform="translate\(([-0-9.]+) ([-0-9.]+)\) scale\(([-0-9.]+)\)"/)!
+      .slice(1)
+      .map(Number);
+
+  test("nothing is drawn unless it is asked for", () => {
+    assert.equal(groupOf(renderSvg(detail(), {})), undefined);
+    assert.ok(groupOf(renderSvg(detail(), { inset: true })));
+  });
+
+  test("it overlays everything, so it is the last layer", () => {
+    const svg = renderSvg(detail(), {
+      inset: true,
+      points: [{ lng: 85.3, lat: 27.7 }],
+      routes: [{ stops: [{ lng: 85.3, lat: 27.7 }, { lng: 84.4, lat: 27.9 }] }],
+    });
+    assert.ok(svg.indexOf("naksha-dots") < svg.indexOf("naksha-inset"));
+    assert.ok(svg.indexOf("naksha-routes") < svg.indexOf("naksha-inset"));
+    assert.ok(svg.indexOf("naksha-pins") < svg.indexOf("naksha-inset"));
+  });
+
+  test("each corner lands in its own corner", () => {
+    const grid = detail();
+    const at = (corner: "top-left" | "top-right" | "bottom-left" | "bottom-right") =>
+      transform(groupOf(renderSvg(grid, { inset: { corner } }))!);
+
+    const [tlx, tly] = at("top-left");
+    const [trx, try_] = at("top-right");
+    const [blx, bly] = at("bottom-left");
+    const [brx, bry] = at("bottom-right");
+
+    assert.equal(tlx, blx, "both left corners share an x");
+    assert.equal(trx, brx, "both right corners share an x");
+    assert.equal(tly, try_, "both top corners share a y");
+    assert.equal(bly, bry, "both bottom corners share a y");
+    assert.ok(tlx < trx, "left is left of right");
+    assert.ok(tly < bly, "top is above bottom");
+    // Inside the frame, on every side.
+    assert.ok(tlx > 0 && tly > 0);
+    const [, , scale] = at("bottom-right");
+    const width = grid.cols * 0.22;
+    assert.ok(brx + width <= grid.cols, "right corner stays inside the map");
+    assert.ok(scale > 0 && scale < 1, "the inset is a miniature");
+  });
+
+  test("size and margin move it the way they say", () => {
+    const grid = detail();
+    const [x1] = transform(groupOf(renderSvg(grid, { inset: { corner: "top-left", margin: 1 } }))!);
+    const [x2] = transform(groupOf(renderSvg(grid, { inset: { corner: "top-left", margin: 4 } }))!);
+    assert.ok(Math.abs(x2 - x1 - 3) < 1e-9, "margin is in dot units");
+
+    const small = transform(groupOf(renderSvg(grid, { inset: { size: 0.2 } }))!)[2];
+    const big = transform(groupOf(renderSvg(grid, { inset: { size: 0.4 } }))!)[2];
+    // Compared loosely because the emitted scale is rounded to three decimals,
+    // so the ratio of two printed values is not the ratio of the two exact ones.
+    assert.ok(Math.abs(big / small - 2) < 0.01, `twice the size is twice the scale, got ${big / small}`);
+  });
+
+  test("the window marks the map's own viewport, and only when there is one", () => {
+    // A detail view: the window is drawn and sits inside the inset's own grid.
+    const zoomed = groupOf(renderSvg(detail(), { inset: true }))!;
+    assert.match(zoomed, /naksha-viewport/);
+
+    // The whole country: nothing to mark, so no window — just the silhouette.
+    const whole = buildGrid(nepalRaster(), { bbox: NEPAL_BBOX });
+    const full = groupOf(renderSvg(whole, { inset: true }))!;
+    assert.doesNotMatch(full, /naksha-viewport/);
+    assert.match(full, /naksha-dots/, "the country is still drawn");
+  });
+
+  test("the panel is skipped when there is nothing to paint it with", () => {
+    const grid = detail();
+    assert.match(groupOf(renderSvg(grid, { inset: true }))!, /<rect[^>]*fill="#ffffff"/);
+    const bare = groupOf(renderSvg(grid, { inset: { background: "transparent" } }))!;
+    assert.doesNotMatch(bare.slice(0, bare.indexOf("naksha-dots")), /<rect/);
+    const custom = groupOf(renderSvg(grid, { inset: { background: "#ff00ff" } }))!;
+    assert.match(custom, /<rect[^>]*fill="#ff00ff"/);
+  });
+
+  test("the inset drops edgeFade, which at 12 rows would wash it out", () => {
+    const grid = detail();
+    // Every dot opaque: no per-dot opacity attribute survives in the inset.
+    const g = groupOf(renderSvg(grid, { inset: true }))!;
+    const dots = g.slice(g.indexOf("naksha-dots"));
+    assert.doesNotMatch(dots.slice(0, dots.indexOf("naksha-viewport")), /opacity="0\./);
+    // And it is an override, not a hard rule.
+    const faded = groupOf(renderSvg(grid, { inset: { theme: { edgeFade: 1 } } }))!;
+    assert.match(faded, /opacity="0\./);
+  });
+
+  test("renderInset is usable on its own, with the same defaults", () => {
+    const grid = detail();
+    const direct = renderInset(grid, lightTheme, {});
+    const viaOptions = groupOf(renderSvg(grid, { inset: true }))!;
+    assert.equal(direct, viaOptions.slice(0, direct.length));
+  });
+
+  test("a custom bbox limits what the inset covers", () => {
+    const grid = buildGrid(nepalRaster(), { bbox: { lo: 85.2, hi: 85.5, la: 27.6, ha: 27.8 } });
+    // An inset over one province rather than the country: fewer dots, and the
+    // window still resolves because the detail box sits inside it.
+    const g = groupOf(renderSvg(grid, { inset: { bbox: VIEWS.bagmati } }))!;
+    assert.match(g, /naksha-viewport/);
   });
 });

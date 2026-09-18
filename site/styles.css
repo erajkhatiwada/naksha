@@ -237,11 +237,88 @@ section > * { max-width: var(--max); margin-inline: auto; }
    so the original gap overflowed by 19px and dropped the accent picker onto a
    second row. Keep any new control's width in mind here. */
 .controls {
+  /* Groups size to their contents and wrap, rather than sitting in fixed
+     columns: a column narrow enough to fit four groups across forces the wide
+     controls inside them to stack, which costs more height than the grouping
+     saves. Measured, fixed columns ran 526px against 380px this way. */
   display: flex;
   flex-wrap: wrap;
-  gap: 20px;
-  align-items: flex-end;
+  gap: 4px 34px;
+  align-items: flex-start;
   margin-bottom: 22px;
+}
+.control-group { flex: 0 1 auto; min-width: 0; }
+
+/* A group is a headed section on a wide screen and an accordion on a narrow
+   one, from the same markup: <details> already carries the open/closed state,
+   the keyboard handling and the accessible name that a div and a button would
+   have to reinvent between them. */
+.control-group > summary {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  cursor: pointer;
+  padding-bottom: 7px;
+  margin-bottom: 13px;
+  border-bottom: 1px solid var(--line);
+  list-style: none;
+}
+.control-group > summary::-webkit-details-marker { display: none; }
+.control-group > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+.group-name {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--text);
+}
+.group-blurb { font-size: 12px; color: var(--muted); }
+.group-body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px 20px;
+  align-items: flex-end;
+}
+
+/* Narrow: one column of accordions, closed by default. The map is what the
+   page is for, and it should not sit below a screen and a half of settings. */
+/* Below this the groups stop fitting side by side, and open groups cost more
+   height than the flat strip ever did — 576px at 900px wide against 351px. So
+   the accordion takes over here rather than at phone width: collapsed it is
+   221px at every size, and the map comes up the screen instead of down it. */
+@media (max-width: 1000px) {
+  /* `.controls` is a flex row, so the single column comes from the direction,
+     not from a grid template — and `align-items` has to be reset with it, or
+     the base rule's `flex-start` shrinks each accordion to the width of its
+     own heading instead of the screen. */
+  .controls { flex-direction: column; align-items: stretch; gap: 10px; }
+  .control-group {
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--panel);
+  }
+  .control-group > summary {
+    padding: 13px 14px;
+    margin-bottom: 0;
+    border-bottom: 0;
+  }
+  .control-group[open] > summary { border-bottom: 1px solid var(--line); }
+  /* A chevron, so a closed group reads as something that opens. */
+  .control-group > summary::after {
+    content: "";
+    margin-left: auto;
+    width: 7px;
+    height: 7px;
+    border-right: 1.5px solid var(--muted);
+    border-bottom: 1.5px solid var(--muted);
+    transform: translateY(-2px) rotate(45deg);
+  }
+  .control-group[open] > summary::after { transform: translateY(2px) rotate(-135deg); }
+  .group-blurb { display: none; }
+  .group-body { padding: 15px 14px 16px; }
 }
 /* Lets a control narrower than its content shrink onto the line rather than
    overflowing it — a flex item's automatic minimum is its content's width. */
@@ -377,6 +454,62 @@ input[type="color"]:disabled { cursor: not-allowed; }
   background: var(--panel);
 }
 .stage svg { width: 100%; height: auto; display: block; }
+
+/* The wrapper exists only to give the minimap something to anchor to — the
+   stage itself is rewritten wholesale on every render. */
+.stage-wrap { position: relative; }
+.minimap {
+  position: absolute;
+  width: 150px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  /* Opaque, and shadowed rather than faded: this floats over a field of dots,
+     and anything translucent lets them show through the country it is drawing.
+     A locator you have to read twice is not doing its job. */
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.35);
+}
+/* Placement is four lines of CSS and nothing more — which is the point the
+   demo is making. The library renders an SVG and has no say in where it goes. */
+.minimap.at-top-right { top: 12px; right: 12px; }
+.minimap.at-top-left { top: 12px; left: 12px; }
+.minimap.at-bottom-right { bottom: 12px; right: 12px; }
+.minimap.at-bottom-left { bottom: 12px; left: 12px; }
+
+.minimap-map {
+  cursor: grab;
+  /* Without this a touch drag scrolls the page instead of moving the viewport:
+     the browser claims the gesture before any listener sees a move. */
+  touch-action: none;
+}
+.minimap-map.is-dragging { cursor: grabbing; }
+.minimap svg { width: 100%; height: auto; display: block; }
+.minimap-zoom {
+  display: flex;
+  gap: 3px;
+  margin-top: 7px;
+}
+.minimap-zoom button {
+  appearance: none;
+  flex: 1;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  padding: 5px 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.minimap-zoom button:hover { color: var(--text); }
+@media (max-width: 560px) {
+  /* 150px of overview across a phone-width map covers the country it is
+     describing. The viewport readout carries the same information in words. */
+  .minimap { display: none; }
+}
+
 /* The cursor is the library's to set: attachInteractions raises it only over
    something that actually has a click handler, so "Off" doesn't lie. */
 .stage svg:focus-visible {
