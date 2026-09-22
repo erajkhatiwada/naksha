@@ -233,9 +233,63 @@ section > * { max-width: var(--max); margin-inline: auto; }
 .strip span { color: var(--muted); font-size: 13.5px; }
 
 /* --------------------------------------------------------------- demo --- */
-/* 20px, not 26: the six controls measure 1069px and the section is 1180 wide,
-   so the original gap overflowed by 19px and dropped the accent picker onto a
-   second row. Keep any new control's width in mind here. */
+/* Map left, settings right, once there is room for both.
+
+   The whole demo stacked is 1319px tall, so with the controls at the top of a
+   1440x790 laptop only 49% of the map was on screen — 36% at 1280x700, and even
+   1920x1080 reached 92%. Changing a control and seeing what it did meant
+   scrolling, every time.
+
+   1120px is where the split starts paying: below it the sidebar squeezes the
+   segmented controls onto second rows faster than the map gains from the width
+   it gives back. Between 1000 and 1120 the page is one column with the groups
+   open, which is what it did before this rule existed. */
+.demo-body { display: grid; }
+@media (min-width: 1120px) {
+  .demo-body {
+    /* minmax(0, 1fr) is a guard, not a fix for anything observed: swapped for a
+       plain 1fr the columns measure identically at 1120/1200/1280/1440/1920,
+       because nothing in this column has a large intrinsic minimum — the SVG is
+       width:100%, the readout's tracks are already minmax(132px, 1fr) and the
+       hint is text. It stays because the automatic-minimum trap is real the
+       moment something wide lands here, and .code-card is what it looks like. */
+    grid-template-columns: minmax(0, 1fr) 372px;
+    gap: 34px;
+    /* Start, not stretch, and this one *is* load-bearing — measured: as shipped
+       the map column pins at top 81px and is still at 81px after a further
+       200px of scroll. Switch to stretch and the item grows from 711px to 943px
+       to fill the row, has nowhere left to travel, and scrolls away to top
+       -123px: the sticky becomes a silent no-op. */
+    align-items: start;
+  }
+  /* Placed rather than reordered: the controls stay first in the DOM so the
+     phone layout is untouched, and the grid puts them in column two here. The
+     sidebar is a single column of groups — at 372px the wrap has nothing to
+     wrap onto, and letting them try just staggers the headings. */
+  .controls {
+    grid-column: 2;
+    grid-row: 1;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 26px;
+  }
+  .control-group { flex: 0 0 auto; }
+  .demo-main {
+    grid-column: 1;
+    grid-row: 1;
+    position: sticky;
+    /* The sticky nav measures 69px, so this is it plus 12px of air.
+       The column itself measures 711px at 1280 and up, 718px at 1120, so with
+       the offset it does not fit a 700px viewport — and does not need to.
+       Measured while stepping through all four control groups, the map is 100%
+       visible at every one of them from 1120x700 up; the only place it is
+       clipped is the instant you land on the section top, before the pin
+       engages (54% at 1120x700, 46% at 1280x700, 66% at 1440x790, 100% at
+       1920x1080). */
+    top: 81px;
+  }
+}
+
 .controls {
   /* Groups size to their contents and wrap, rather than sitting in fixed
      columns: a column narrow enough to fit four groups across forces the wide
@@ -444,8 +498,14 @@ input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
 input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 6px; }
 input[type="color"]:disabled { cursor: not-allowed; }
 
-/* margin-inline must stay auto, or the stage left-aligns to the section
-   padding while the controls and readout centre inside --max. */
+/* `.demo-body` is now the only `section > *` in the demo — measured, the
+   section's children are `.section-head` and `.demo-body`, and `.demo-body` is
+   the element carrying `max-width: 1180px` and the auto margins. Everything
+   under it, this stage included, simply fills its column: the `auto` here
+   computes to 0px today. It is kept because it costs nothing and is correct the
+   moment anything caps the stage's own width — but it is no longer what centres
+   the map, so do not read it as load-bearing. The shorthand rule now belongs to
+   `.demo-body`: give *that* a `margin` and the whole demo goes flush left. */
 .stage {
   margin: 0 auto;
   border: 1px solid var(--line);
@@ -517,22 +577,35 @@ input[type="color"]:disabled { cursor: not-allowed; }
   outline-offset: -2px;
 }
 
+/* A grid, not wrapping flex: in the map column the nine tiles no longer fit on
+   one line, and wrapped flex rows size independently — five tiles above four
+   put every rule in a different place on each row. Grid tracks line up. */
 .readout {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
   margin-top: 18px;
   border: 1px solid var(--line);
   border-radius: 10px;
   overflow: hidden;
   background: var(--panel);
 }
+/* Rules as outset shadows rather than borders: a border sits *inside* the
+   border box, so the tile ending a full row drew its rule 1px in from the
+   container edge and read as a doubled line. An outset shadow lands on that
+   edge instead and `overflow: hidden` takes it.
+
+   That only covers the tile that ends a *full* row. The last row is normally
+   short — the readout is 8 or 9 tiles and `auto-fit` gives 5 columns in the
+   774px map column, 4 at 658px, 2 at 390px — so the final tile has an empty
+   cell beside it and its right shadow hangs in the middle of the row with
+   nothing to clip it. Measured at 1440 the gap is 154px, at 600 it is 419px,
+   and it is visible in both. `:last-child` is the one thing CSS does know here,
+   and it is exactly the tile that needs the rule dropped. */
 .readout div {
-  flex: 1 1 132px;
   padding: 13px 16px;
-  border-right: 1px solid var(--line);
+  box-shadow: 1px 0 0 var(--line), 0 1px 0 var(--line);
 }
-.readout div:last-child { border-right: 0; }
+.readout div:last-child { box-shadow: 0 1px 0 var(--line); }
 .readout k {
   display: block;
   font-size: 11.5px;
@@ -553,9 +626,10 @@ input[type="color"]:disabled { cursor: not-allowed; }
   color: var(--muted);
   font-size: 14.5px;
   line-height: 1.5;
-  /* `auto` inline, not 0: `section > *` centres children inside --max, and the
-     margin shorthand would reset that to flush-left against the section
-     padding while the map and controls stay centred. Same trap as .stage. */
+  /* The hint sits inside `.demo-main` now, not directly under <section>, so
+     `section > *` no longer reaches it and the inline `auto` computes to 0px.
+     Harmless and kept for the same reason as `.stage`; the trap it used to
+     guard has moved up to `.demo-body`. */
   margin: 0 auto 14px;
   min-height: calc(var(--hint-lines) * 1.5em);
 }
@@ -571,9 +645,11 @@ input[type="color"]:disabled { cursor: not-allowed; }
 }
 
 /* ------------------------------------------------------------- finder --- */
-/* Width is capped on the input, not on .finder: `section > *` centres every
-   direct child, so a narrow .finder would sit centred instead of flush left
-   with the controls and the stage. */
+/* Width is capped on the input, not on .finder. The original reason was
+   `section > *` centring every direct child; .finder is inside `.demo-main`
+   now, so that no longer applies — but the cap stays on the input because a
+   narrowed .finder would still drag its absolutely positioned results list in
+   with it, and the list should stay as wide as the field it belongs to. */
 .finder { position: relative; margin-bottom: 18px; }
 .finder label {
   display: block;
@@ -903,11 +979,43 @@ footer p { max-width: var(--max); margin: 0 auto 6px; }
 /* Reserves carry one line of headroom over the measured worst case at each
    width. Below 500px the type also drops a step: the hint wraps by character
    count, so a smaller face fits more per line and costs fewer reserved lines
-   on exactly the screens where vertical space is scarcest. */
-@media (max-width: 750px) { .hint { --hint-lines: 4; } }
-@media (max-width: 560px) { .hint { --hint-lines: 5; } }
+   on exactly the screens where vertical space is scarcest.
+
+   The ladder is measured and the breakpoints are the crossings themselves, not
+   round numbers. Harvested by driving the page: every distinct `hint.innerHTML`
+   the demo can emit across mode x language x interaction x district context x
+   selection, mouse and touch, sweeping every cell of the viewBox plus every pin
+   and route element — 33,349 strings, of which 32,932 quote a per-dot
+   coordinate and 2,260 carry click mode's copy button. Replayed at every pixel
+   from 320 to 1920, worst case:
+
+       <= 360   6 lines      624..876    3 lines
+       361..438 5 lines      877..1119   2 lines
+       439..623 4 lines      >= 1120     3 lines  (two columns)
+
+   Everything below 1120 is set by a single line: find mode on Rukum East, whose
+   HQ has no shipped coordinate, so the hint explains the 2015 split instead.
+   Miss that one string and every crossing lands early — which is why the sample
+   has to be collected by driving the real page, and why the size of it is worth
+   stating. A first pass here fired its events at the <svg> instead of at
+   `elementFromPoint`, so `closest()` never matched a pin or a route, and it
+   scanned click mode for hover feedback that mode does not give: 19,278
+   strings, none of them the long ones, and a 3-to-2 crossing at 816.
+
+   Re-derive this, don't nudge it. Every round set tried here has sat *below* its
+   crossing — 750/560/400 first, then 909/563/408/342 — and a breakpoint below
+   its crossing reserves one line too few in the band above it, which is the
+   feedback loop this reserve exists to prevent, live again.
+
+   The jump back at 1120 is the two-column layout: the hint rides in the map
+   column, 658-774px wide rather than the full 1063, so it wraps like a tablet
+   even on a 1920 screen. Change that grid and re-measure this. */
+@media (max-width: 876px) { .hint { --hint-lines: 4; } }
+@media (max-width: 623px) { .hint { --hint-lines: 5; } }
 @media (max-width: 500px) { .hint { font-size: 13.5px; } }
-@media (max-width: 400px) { .hint { --hint-lines: 6; } }
+@media (max-width: 438px) { .hint { --hint-lines: 6; } }
+@media (max-width: 360px) { .hint { --hint-lines: 7; } }
+@media (min-width: 1120px) { .hint { --hint-lines: 4; } }
 
 /* The reserve exists to stop the map moving under a *hovering* cursor. With no
    hover there is no cursor to protect: a tap changes the hint after the finger

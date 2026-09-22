@@ -7,7 +7,7 @@
  * every zoom level.
  */
 import type { Bbox, LngLat } from "./geo.ts";
-import { aspectWidth, bboxSizeKm } from "./geo.ts";
+import { aspectWidth, bboxSizeKm, DEFAULT_GRID_HEIGHT } from "./geo.ts";
 import { OUTSIDE, type RegionRaster } from "./raster.ts";
 
 export interface Dot {
@@ -31,6 +31,18 @@ export interface Grid {
   rows: number;
   bbox: Bbox;
   dots: Dot[];
+  /**
+   * The part of the sampled field the requested viewport actually covers, in
+   * dot units — what the renderer turns into the SVG viewBox.
+   *
+   * `{ x: 0, y: 0, cols, rows }` for an ordinary grid, where the field and the
+   * viewport are the same rectangle. They come apart only under `align`, which
+   * samples a lattice that does not start where the viewport does: the field
+   * then runs up to one dot past each edge and `x`/`y` carry the remainder, so
+   * a viewport can sit *between* dots. That is what lets a pan glide instead
+   * of stepping a whole dot at a time.
+   */
+  viewBox: { x: number; y: number; cols: number; rows: number };
   /** Ground distance between adjacent dots, km. */
   kmPerDot: number;
   /** Region ids with at least one dot. */
@@ -84,9 +96,34 @@ export interface GridOptions {
    * impossible to highlight or click.
    */
   ensureRegions?: boolean;
+  /**
+   * Sample on *this* box's lattice rather than on `bbox`'s own.
+   *
+   * The dot grid is normally anchored to the viewport, which means a viewport
+   * that moves by a fraction of a dot re-samples every cell against different
+   * ground: the dots hold still on screen while the country slides underneath
+   * them, and the silhouette re-forms in place instead of moving. Measured at
+   * the demo's second zoom step, half a dot of pan changes 387 of 1,990 dots,
+   * all of them on the border.
+   *
+   * Pass the box the lattice should stay fixed to — typically the viewport as
+   * it was when the zoom last changed — and the field is sampled on that
+   * lattice instead, extended to cover `bbox` and reported through
+   * `grid.viewBox`. Every dot then keeps its ground position for the whole
+   * gesture, the border stops shimmering, and the viewport is free to sit
+   * between dots.
+   *
+   * Costs one extra row and column of cells — 71x41 against 70x40, 4% of the
+   * budget. `align: bbox` is exactly the default, so passing the viewport
+   * itself changes nothing at all.
+   */
+  align?: Bbox;
 }
 
-export const DEFAULT_GRID_HEIGHT = 40;
+// Defined in geo.ts, where `panBbox` needs it to snap a pan onto the same
+// lattice this samples on. Re-exported here because this is where it belongs
+// conceptually, and where every consumer already imports it from.
+export { DEFAULT_GRID_HEIGHT } from "./geo.ts";
 
 /** Sub-samples per cell edge. Capped so cost stays flat as zoom deepens. */
 function subSamples(raster: RegionRaster, cols: number): number {
@@ -101,12 +138,16 @@ function subSamples(raster: RegionRaster, cols: number): number {
  */
 export function buildGrid(raster: RegionRaster, options: GridOptions = {}): Grid {
   const height = options.height ?? DEFAULT_GRID_HEIGHT;
-  const bbox = options.bbox ?? raster.bbox;
+  const view = options.bbox ?? raster.bbox;
   const sampling = options.sampling ?? "dominant";
   const coverage = options.coverage ?? 0.5;
   const ensureRegions = options.ensureRegions ?? true;
 
-  const cols = aspectWidth(bbox, height);
+  // `bbox` is the field actually sampled and `view` the window onto it. They
+  // are the same rectangle unless `align` moves the lattice off the viewport,
+  // in which case the field grows by up to one dot on each side and the
+  // remainder becomes the viewBox origin.
+  const { bbox, cols, rows, viewBox } = layout(view, height, options.align);
   const spanLng = bbox.hi - bbox.lo;
   const spanLat = bbox.ha - bbox.la;
   const k = sampling === "center" ? 1 : subSamples(raster, cols);
@@ -121,14 +162,14 @@ export function buildGrid(raster: RegionRaster, options: GridOptions = {}): Grid
   const tally = new Uint16Array(256);
   const seen: number[] = [];
 
-  for (let row = 0; row < height; row++) {
+  for (let row = 0; row < rows; row++) {
     for (let col = 0; col < cols; col++) {
       let insideCount = 0;
       for (const v of seen) tally[v] = 0;
       seen.length = 0;
 
       for (let sy = 0; sy < k; sy++) {
-        const lat = bbox.ha - ((row + (sy + 0.5) / k) * spanLat) / height;
+        const lat = bbox.ha - ((row + (sy + 0.5) / k) * spanLat) / rows;
         for (let sx = 0; sx < k; sx++) {
           const lng = bbox.lo + ((col + (sx + 0.5) / k) * spanLng) / cols;
           const v = raster.sampleAt(lng, lat);
@@ -159,7 +200,7 @@ export function buildGrid(raster: RegionRaster, options: GridOptions = {}): Grid
         row,
         region,
         lng: bbox.lo + ((col + 0.5) * spanLng) / cols,
-        lat: bbox.ha - ((row + 0.5) * spanLat) / height,
+        lat: bbox.ha - ((row + 0.5) * spanLat) / rows,
         coverage: cellCoverage,
       });
       regions.add(region);
@@ -170,12 +211,55 @@ export function buildGrid(raster: RegionRaster, options: GridOptions = {}): Grid
 
   return {
     cols,
-    rows: height,
+    rows,
     bbox,
     dots,
+    viewBox,
     kmPerDot: bboxSizeKm(bbox).width / cols,
     regions,
     raster,
+  };
+}
+
+/**
+ * The field to sample and the window onto it.
+ *
+ * Without `align` this is the identity: the viewport is the field, the viewBox
+ * starts at the origin, and every number below reduces to what `buildGrid`
+ * computed inline before. With it, the lattice comes from `align` — cell size
+ * and phase both — and the field is the whole cells that cover the viewport,
+ * which is at most one more in each direction.
+ */
+function layout(
+  view: Bbox,
+  height: number,
+  align?: Bbox,
+): { bbox: Bbox; cols: number; rows: number; viewBox: Grid["viewBox"] } {
+  const cols = Math.max(1, aspectWidth(view, height));
+  if (!align) {
+    return { bbox: view, cols, rows: height, viewBox: { x: 0, y: 0, cols, rows: height } };
+  }
+
+  const cellLng = (align.hi - align.lo) / Math.max(1, aspectWidth(align, height));
+  const cellLat = (align.ha - align.la) / height;
+  // Floor, so the field starts on or before the viewport's own edge and the
+  // remainder is never negative — a viewBox origin outside the field would
+  // show blank where the map should be.
+  const lo = align.lo + Math.floor((view.lo - align.lo) / cellLng) * cellLng;
+  const ha = align.ha - Math.floor((align.ha - view.ha) / cellLat) * cellLat;
+  const fieldCols = Math.max(1, Math.ceil((view.hi - lo) / cellLng - 1e-9));
+  const fieldRows = Math.max(1, Math.ceil((ha - view.la) / cellLat - 1e-9));
+
+  return {
+    bbox: { lo, hi: lo + fieldCols * cellLng, ha, la: ha - fieldRows * cellLat },
+    cols: fieldCols,
+    rows: fieldRows,
+    viewBox: {
+      x: (view.lo - lo) / cellLng,
+      y: (ha - view.ha) / cellLat,
+      cols: (view.hi - view.lo) / cellLng,
+      rows: (view.ha - view.la) / cellLat,
+    },
   };
 }
 

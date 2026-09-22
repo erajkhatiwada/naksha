@@ -16,6 +16,7 @@ import {
   eventPoint,
   unproject,
   zoomBbox,
+  panBbox,
   clampBbox,
   districtBbox,
   padBbox,
@@ -297,8 +298,8 @@ function initialOverview(): Overview {
  *
  * A demo control rather than a library option, and deliberately so: the
  * overview here is its own element, so where it sits is a CSS class and nothing
- * the renderer knows about. The library's own `overview` option is the other
- * answer — it insets a miniature into the SVG itself, which is what you want
+ * the renderer knows about. The library's own `inset` option is the other
+ * answer — it puts a miniature inside the SVG itself, which is what you want
  * when there is no DOM to position.
  */
 type Corner = "top-right" | "top-left" | "bottom-right" | "bottom-left";
@@ -393,6 +394,16 @@ const state = {
    * step, or marks it Custom when the box no longer matches any of them.
    */
   bbox: VIEWS[initialView()] as Bbox,
+  /**
+   * The box whose dot lattice the field is sampled on.
+   *
+   * Re-pinned by every zoom, named view and reset — anything that rebuilds the
+   * map — and deliberately *not* by a drag. Holding it still through a drag is
+   * what lets the viewport slide between dots: the dots keep their ground
+   * positions, the silhouette translates rather than re-forming, and the map
+   * glides instead of stepping a whole dot at a time.
+   */
+  lattice: VIEWS[initialView()] as Bbox,
   find: initialFind() as Entry | null,
   /** Whether the overview map is drawn. See `initialOverview`. */
   overview: initialOverview(),
@@ -460,6 +471,22 @@ function mapTheme(background: string): Partial<Theme> {
   };
 }
 
+/**
+ * The dots the viewBox actually shows.
+ *
+ * A dot owns the cell `[col, col+1]` and is drawn at its centre, so it is on
+ * screen when that centre falls inside the window. Everything else in the
+ * field is the one-dot margin `align` samples so the viewport can slide
+ * between dots, and the viewBox clips it.
+ */
+function visibleDots(grid: Grid): Dot[] {
+  const { x, y, cols, rows } = grid.viewBox;
+  return grid.dots.filter(
+    (d) =>
+      d.col + 0.5 >= x && d.col + 0.5 <= x + cols && d.row + 0.5 >= y && d.row + 0.5 <= y + rows,
+  );
+}
+
 /** Which views ask the renderer for labels — see `render`. */
 const drawsLabels = () => state.mode === "routes" || state.mode === "find";
 
@@ -480,7 +507,7 @@ const HIGHLIGHT_RADIUS = 0.44;
 
 function render() {
   const t0 = performance.now();
-  const grid = buildGrid(raster, { bbox: state.bbox });
+  const grid = buildGrid(raster, { bbox: state.bbox, align: state.lattice });
   const gridMs = performance.now() - t0;
 
   let routes: Route[] = [];
@@ -572,18 +599,29 @@ function render() {
   const nodes = stage.querySelectorAll("*").length;
   const fmt = (n: number) => n.toLocaleString();
 
+  // An aligned field runs a dot past each edge so the viewport can sit between
+  // dots, and those dots are clipped by the viewBox. Counting them would put a
+  // district in the "in view" tally that is not on screen, and inflate the dot
+  // count by the margin — so the readout counts the window, not the field.
+  const seen = visibleDots(grid);
+  const dotCount = seen.length;
+  const regionCount = new Set(seen.map((d) => d.region)).size;
+
   let rows: [string, string][];
   if (state.mode === "routes") {
     rows = [
       ["Routes", `${routes.length}`],
       ["Destinations", `${HUBS.length}`],
-      ["Dots", fmt(grid.dots.length)],
+      ["Dots", fmt(dotCount)],
       ["DOM nodes", fmt(nodes)],
       ["Grid build", `${gridMs.toFixed(1)} ms`],
       ["SVG build", `${renderMs.toFixed(1)} ms`],
     ];
   } else if (state.mode === "network") {
-    const busiest = Math.max(...clusters.map((c) => c.points.length));
+    // Folded from 0 rather than `Math.max(...[])`, which is -Infinity: zoom
+    // into a corner of Karnali and the readout shipped "Largest cluster
+    // -Infinity" the moment the last location left the viewport.
+    const busiest = clusters.reduce((n, c) => Math.max(n, c.points.length), 0);
     rows = [
       ["Locations", `${LOCATIONS.length}`],
       ["Dots used", `${clusters.length}`],
@@ -594,9 +632,9 @@ function render() {
     ];
   } else if (state.mode === "districts") {
     rows = [
-      ["Districts", `${grid.regions.size}`],
+      ["Districts", `${regionCount}`],
       ["Provinces", "7"],
-      ["Dots", fmt(grid.dots.length)],
+      ["Dots", fmt(dotCount)],
       ["DOM nodes", fmt(nodes)],
       ["Grid build", `${gridMs.toFixed(1)} ms`],
       ["SVG build", `${renderMs.toFixed(1)} ms`],
@@ -617,7 +655,7 @@ function render() {
           ["Districts", `${DISTRICTS.length}`],
           ["Places", `${CITY_COUNT}`],
           ["Scripts", "2"],
-          ["Dots", fmt(grid.dots.length)],
+          ["Dots", fmt(dotCount)],
           ["Grid build", `${gridMs.toFixed(1)} ms`],
           ["SVG build", `${renderMs.toFixed(1)} ms`],
         ];
@@ -627,14 +665,14 @@ function render() {
   // changing the box can be read off one place: the ground resolution moves by
   // 40x across the ladder while the dot count above barely moves at all.
   rows.push(["km/dot", grid.kmPerDot.toFixed(2)]);
-  rows.push(["Districts in view", `${grid.regions.size}`]);
+  rows.push(["Districts in view", `${regionCount}`]);
   if (points.length) {
     rows.push(["Off-screen", `${offscreen.length} of ${points.length}`]);
   }
 
   readout.innerHTML = rows.map(([k, v]) => `<div><k>${k}</k><v>${v}</v></div>`).join("");
-  lastClusterCount = clusters.length;
-  hint.innerHTML = state.selected ? describeSelection() : defaultHint(clusters.length);
+  lastCounts = { shown: points.length - offscreen.length, dots: clusters.length };
+  hint.innerHTML = state.selected ? describeSelection() : defaultHint();
   renderMinimap(theme);
   attach(grid, points, routes);
 }
@@ -667,13 +705,28 @@ function verb(): string {
   );
 }
 
-function defaultHint(clusterCount: number): string {
+function defaultHint(): string {
   if (state.mode === "network") {
-    const merged = LOCATIONS.length - clusterCount;
+    const { shown, dots } = lastCounts;
+    // Counted against what is drawn, not against the whole set. A point outside
+    // the viewport is on no dot at all, so charging it to the overlap turned
+    // zooming *in* — the thing that separates locations — into a claim that
+    // more of them were colliding: at the tightest view the line read "38
+    // locations occupy 0 dots — 38 share one with a neighbour", and the
+    // readout beside it said "Largest cluster -Infinity".
+    if (shown === 0) {
+      return (
+        `<b>None of the ${LOCATIONS.length} locations</b> are in this viewport — ` +
+        `zoom out to bring them back.` + verb()
+      );
+    }
+    const where =
+      shown < LOCATIONS.length
+        ? `<b>${shown} of ${LOCATIONS.length} locations</b> are in view on`
+        : `<b>${LOCATIONS.length} locations</b> across all seven provinces occupy`;
     return (
-      `<b>${LOCATIONS.length} locations</b> across all seven provinces occupy ` +
-      `<b>${clusterCount} dots</b> — ${merged} share one with a neighbour, and the badge ` +
-      `reports it rather than hiding the overlap.` + verb()
+      `${where} <b>${dots} dots</b> — ${shown - dots} share one with a neighbour, and ` +
+      `the badge reports it rather than hiding the overlap.` + verb()
     );
   }
   if (state.mode === "districts") {
@@ -710,8 +763,13 @@ function defaultHint(clusterCount: number): string {
 
 // --------------------------------------------------------- interaction ---
 
-/** Kept so a hover that ends can restore the view's own default line. */
-let lastClusterCount = 0;
+/**
+ * Kept so a hover that ends can restore the view's own default line.
+ *
+ * Both halves, not just the dot count: the network line subtracts one from the
+ * other, and the subtraction is only true of the points actually on the map.
+ */
+let lastCounts = { shown: 0, dots: 0 };
 
 /**
  * A pasteable `points` entry for a dot's centre.
@@ -786,13 +844,13 @@ function describeRoute(route: Route, index: number): string {
 /** The persistent line for whatever a click pinned. */
 function describeSelection(): string {
   const sel = state.selected;
-  if (!sel) return defaultHint(lastClusterCount);
+  if (!sel) return defaultHint();
   if (sel.kind === "cluster") return describeCluster(sel.cluster);
   if (sel.kind === "route") {
     const route = currentRoutes[sel.index];
-    return route ? describeRoute(route, sel.index) : defaultHint(lastClusterCount);
+    return route ? describeRoute(route, sel.index) : defaultHint();
   }
-  if (!districtById(sel.id)) return defaultHint(lastClusterCount);
+  if (!districtById(sel.id)) return defaultHint();
   // The dot that was actually clicked, not the district's first — the line
   // quotes a coordinate, and quoting a different one would be a small lie.
   return (
@@ -845,7 +903,7 @@ function attach(grid: Grid, points: MapPoint[], routes: Route[]) {
   if (!svg || state.interact === "off") return;
 
   const restore = () => {
-    hint.innerHTML = state.selected ? describeSelection() : defaultHint(lastClusterCount);
+    hint.innerHTML = state.selected ? describeSelection() : defaultHint();
   };
 
   if (state.interact === "hover") {
@@ -1137,8 +1195,25 @@ const ZOOM_STEP = 2;
  */
 function setBbox(next: Bbox) {
   state.bbox = next;
+  // Re-pinned: this is a zoom, a named view or a reset, all of which rebuild
+  // the field anyway. A drag calls `slideBbox` and leaves the lattice alone.
+  state.lattice = next;
   // A dot pinned in one viewport is a different dot in the next — the grid is
   // resampled, so the cell under that coordinate is not the same cell.
+  state.selected = null;
+  syncView();
+  render();
+}
+
+/**
+ * Move the viewport without disturbing the lattice — what a drag calls.
+ *
+ * The distinction is the whole of why the map glides: `setBbox` re-pins the
+ * lattice to the new box, which is right when the field is being rebuilt and
+ * wrong when it is only being slid.
+ */
+function slideBbox(next: Bbox) {
+  state.bbox = next;
   state.selected = null;
   syncView();
   render();
@@ -1266,8 +1341,18 @@ function atLeastFloor(box: Bbox): Bbox {
  * Falling back to a step zoom keeps the gesture from being a dead end: off the
  * field there is no district to frame, and on one already filling the view
  * re-framing it would look like nothing happened.
+ *
+ * **Counted off `click`, not listened for as `dblclick`.** In click mode every
+ * click re-renders — `onRegionClick` and `clearOnMiss` both call `render`,
+ * which replaces the SVG through `stage.innerHTML`. The two clicks then have
+ * different target nodes, and the browser dispatches no `dblclick` at all, so
+ * the gesture was dead in exactly the one mode whose hint promises it. The
+ * click count survives that swap because it belongs to the pointer sequence
+ * rather than to the target: measured, the second click still arrives with
+ * `detail === 2` after the whole subtree has been rebuilt under it.
  */
-stage.addEventListener("dblclick", (e) => {
+stage.addEventListener("click", (e) => {
+  if (e.detail < 2) return;
   const svg = stage.querySelector("svg");
   if (!svg || !currentGrid) return;
   const at = eventPoint(svg, e);
@@ -1324,18 +1409,17 @@ function renderMinimap(theme: Partial<Theme>) {
 /**
  * The viewport centred on a coordinate, keeping its current size.
  *
- * Clamped, so a drag towards the border slides the box back inside the frame
- * rather than centring on a point half of whose view would be empty.
+ * `panBbox` rather than the obvious `clampBbox` on a hand-rolled box, which is
+ * what this used to be: carrying the *degree* span to the new centre is not
+ * carrying the viewport. Longitude degrees narrow by cos(lat), so the box lost
+ * ground width as it travelled north, `aspectWidth` answered with fewer
+ * columns, and the map changed shape in the middle of a drag — measured here,
+ * 71 columns down to 69 and the drawn map growing 436px to 449px tall while the
+ * pointer was still down. `panBbox` carries the ground size, which pins the
+ * column count by construction.
  */
 function viewportOn(to: LngLat): Bbox {
-  const width = state.bbox.hi - state.bbox.lo;
-  const height = state.bbox.ha - state.bbox.la;
-  return clampBbox({
-    lo: to.lng - width / 2,
-    hi: to.lng + width / 2,
-    la: to.lat - height / 2,
-    ha: to.lat + height / 2,
-  });
+  return panBbox(state.bbox, to, { align: state.lattice });
 }
 
 /** Where on the overview a pointer event landed, or null if it missed. */
@@ -1377,7 +1461,7 @@ minimapMap.addEventListener("pointerdown", (e) => {
   dragging = true;
   minimapMap.classList.add("is-dragging");
   minimapMap.setPointerCapture(e.pointerId);
-  if (!inside) setBbox(viewportOn(to));
+  if (!inside) slideBbox(viewportOn(to));
 });
 
 minimapMap.addEventListener("pointermove", (e) => {
@@ -1392,13 +1476,17 @@ minimapMap.addEventListener("pointermove", (e) => {
   // 16.7 ms frame.
   frame ||= requestAnimationFrame(() => {
     frame = 0;
-    if (pendingTo) setBbox(viewportOn(pendingTo));
+    if (pendingTo) slideBbox(viewportOn(pendingTo));
   });
 });
 
 const endDrag = (e: PointerEvent) => {
   if (!dragging) return;
   dragging = false;
+  // Flushed rather than dropped: releasing inside the frame the last move
+  // scheduled would otherwise discard it, leaving the viewport up to one
+  // frame of travel behind where the pointer actually let go.
+  if (pendingTo) slideBbox(viewportOn(pendingTo));
   pendingTo = null;
   minimapMap.classList.remove("is-dragging");
   if (minimapMap.hasPointerCapture(e.pointerId)) minimapMap.releasePointerCapture(e.pointerId);

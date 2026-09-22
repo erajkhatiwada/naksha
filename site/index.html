@@ -180,6 +180,12 @@
         </ul>
       </div>
 
+      <!-- Two columns on a wide screen: map left, settings right, so a control
+           and the thing it changes are on screen together. The controls stay
+           FIRST in the DOM and are moved to column two by the grid, which keeps
+           the single-column phone order (settings, then map) exactly as it was
+           — reordering in the markup instead would have flipped it. -->
+      <div class="demo-body">
       <!-- Grouped rather than one flat strip: fourteen controls in a row runs
            816px tall on a 390px screen, which is taller than the screen. The
            groups are <details> so the same markup is four headed sections on a
@@ -328,6 +334,10 @@
         </details>
       </div>
 
+      <!-- The map column. Sticky on a wide screen, so the settings scroll past
+           a map that stays put; everything that reports on the map rides with
+           it, or you would be reading a hint for something off-screen. -->
+      <div class="demo-main">
       <div class="finder" id="finder" hidden>
         <label for="find-input">Search districts and places</label>
         <input
@@ -369,6 +379,8 @@
       </div>
 
       <div class="readout" id="readout"></div>
+      </div>
+      </div>
     </section>
 
     <section id="how" class="how">

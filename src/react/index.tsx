@@ -161,11 +161,28 @@ export function Naksha({
   // A whole second grid, so it is memoised like the dot field rather than
   // rebuilt whenever a pin is hovered. Serialised because the common call
   // passes an object literal, which is a new identity on every render.
+  //
+  // JSON has no form for a function, so `insetKey` cannot see either colouring
+  // callback and both have to be dependencies in their own right: the map's
+  // own `regionColor`, which the inset inherits, and the inset's override.
+  // Measured rather than assumed — with `bbox` hoisted so `grid` keeps its
+  // identity, flipping `inset.regionColor` alone left the miniature on its
+  // previous colours until this dependency was added. An inline `bbox` literal
+  // hides it, because the new grid invalidates the memo on every render.
   const insetKey = JSON.stringify(inset ?? null);
+  const insetRegionColor = inset && inset !== true ? inset.regionColor : undefined;
   const insetLayer = useMemo(
-    () => (inset ? renderInset(grid, theme, inset === true ? {} : inset) : ""),
+    () =>
+      inset
+        ? renderInset(grid, theme, {
+            // Same default as `renderSvg`: the map's own colouring, so the
+            // miniature is recognisably the same map.
+            regionColor,
+            ...(inset === true ? {} : inset),
+          })
+        : "",
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [grid, theme, insetKey],
+    [grid, theme, insetKey, regionColor, insetRegionColor],
   );
 
   const svgRef = useRef<SVGSVGElement>(null);

@@ -7,7 +7,7 @@
  */
 
 export type { LngLat, Bbox } from "./geo.ts";
-export type { ZoomOptions } from "./geo.ts";
+export type { ZoomOptions, PanOptions } from "./geo.ts";
 export {
   NEPAL_BBOX,
   MIN_ZOOM_SPAN,
@@ -19,6 +19,7 @@ export {
   fitAspect,
   clampBbox,
   zoomBbox,
+  panBbox,
 } from "./geo.ts";
 
 export type { RasterSource, Region } from "./raster.ts";

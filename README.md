@@ -223,8 +223,57 @@ It is bounded at both ends, so a `+` button cannot walk off the map. Zooming out
 is capped by the national frame; zooming in stops at `MIN_ZOOM_SPAN` — 0.32° of
 longitude, which is where the raster runs out. At that width one dot covers one
 raster cell, **0.447 km/dot against 0.447 km/cell**, and narrower just upsamples
-the bitmap. Both spans scale together, so the box keeps its shape and the map is
-never stretched. `clampBbox` is the same containment on its own, for a pan.
+the bitmap. The box keeps the shape it is *drawn* in, so the map is never
+stretched — that shape is a ground ratio rather than a ratio of degrees, and
+holding it takes one cosine, because longitude degrees narrow towards the poles.
+
+### Panning holds the lattice still, not the viewport
+
+`panBbox(bbox, to)` moves a viewport to a new centre, and `align` is what makes
+a drag look like a drag. Rolling your own with `clampBbox` goes wrong twice
+over, and fixing either half alone still leaves the map deforming under the
+pointer:
+
+- Carrying the *degree* span loses ground width as the box travels north,
+  `aspectWidth` answers with fewer columns, and the map changes shape in the
+  middle of the drag — measured on the demo, 71 columns down to 69 and the
+  drawn map growing 436px to 449px tall while the pointer was still down.
+- The dot grid is anchored to the viewport, so a box sliding by a fraction of a
+  cell re-samples every cell against different ground: the dots hold still on
+  screen while the country slides underneath and the silhouette re-forms in
+  place. Half a dot of pan changes 387 of 1,990 dots, all on the border.
+
+Pin the lattice to a box the gesture holds still — the viewport as it was when
+the zoom last changed — and both go away:
+
+```ts
+let view = NEPAL_BBOX;
+let lattice = view;                      // re-pinned by zoom, held by a drag
+
+const draw = () => (el.innerHTML = renderNepal({ bbox: view, align: lattice, points }));
+
+const onZoom = (f) => { view = zoomBbox(view, f); lattice = view; draw(); };
+const onDrag = (to) => { view = panBbox(view, to, { align: lattice }); draw(); };
+```
+
+`align` samples that lattice instead, extends the field to cover the viewport,
+and reports the sub-cell remainder in `grid.viewBox`, which becomes the SVG's
+viewBox origin. Dots keep their ground positions for the whole gesture, the
+window stays a constant number of cells across — measured, exactly 70 × 40 at
+every position the demo can reach — and the map **glides** rather than stepping
+a dot at a time: a fixed ground point moves 4.09px a frame where a whole dot is
+11.03px. Measured over 30-frame drags, dots disagreeing with a rigid
+translation: 2 right, 3 north, 3 diagonal, 4 into the frame edge, against 1,764
+before.
+
+It costs one row and column of dots — 71 × 41 against 70 × 40, 4% of the budget
+— and moves the cos(lat) approximation from per-viewport to per-gesture, so the
+ground size of a dot varies by up to 3.4% across a full-country pan instead of
+the column count varying. `align: bbox` is exactly the default, so a map that
+never pans is unchanged.
+
+`clampBbox` remains the plain containment, for when you want nothing but the
+frame enforced.
 
 | Step | lng span | dots | km/dot | districts | cells/dot |
 | ---- | -------- | ----- | ------ | --------- | --------- |
@@ -271,6 +320,12 @@ as it is whenever the map is drawn straight onto a page, pass
 `edgeFade: 0`, because fading partly-covered cells softens a border at 40 rows
 but at 12 rows most of the country *is* edge and the same rule washes the
 silhouette away; `inset: { theme: { edgeFade: 1 } }` puts it back.
+
+It inherits the map's own `regionColor`, so the miniature is recognisably the
+same map rather than a second, unrelated thing floating on top of it. Pass
+`inset: { regionColor: () => undefined }` for a monochrome locator — worth it
+when the palette is loud enough to compete with the window rectangle, though on
+a dark theme the silhouette then has little left to stand out against.
 
 ### Or render a second map and place it yourself
 
@@ -327,9 +382,7 @@ zoom, or a click on the overview to recentre:
 
 ```ts
 const moveTo = (to) => {
-  const w = (view.hi - view.lo) / 2;
-  const h = (view.ha - view.la) / 2;
-  view = clampBbox({ lo: to.lng - w, hi: to.lng + w, la: to.lat - h, ha: to.lat + h });
+  view = panBbox(view, to, { align: lattice });   // see "Panning holds the lattice"
   draw();
 };
 
@@ -518,12 +571,13 @@ no `Image`, no canvas, no `fetch` and no top-level await.
 | `pickLabel` / `bothLabels` / `regionName` | Bilingual label helpers |
 | `arcPath` / `arcHeight` / `routePath` | Arc geometry |
 | `zoomBbox(bbox, factor, opts?)` | Scale a viewport about a point, bounded by the frame and the raster's resolution |
+| `panBbox(bbox, to, opts?)` | Move a viewport to a new centre without changing what the map looks like — the pan half of `zoomBbox` |
 | `clampBbox(bbox, limit?)` | Slide a box back inside the frame, shrinking only if it cannot fit |
 | `districtBbox(id)` | A district's bounds — the box to zoom to when one is picked |
 | `unproject(grid, x, y)` | viewBox coordinates back to `{ lng, lat }` — the inverse of `project` |
 | `eventPoint(svg, event)` | A pointer event in viewBox coordinates, for gestures you wire yourself |
 | `viewportRect(grid, bbox)` | Where a viewport lands on a grid, clipped — the geometry behind `viewport` |
-| `renderInset(grid, theme, opts?)` | The inset layer on its own, as a `<g>` |
+| `renderInset(grid, theme, opts?)` | The inset layer on its own, as a `<g>` — pass `regionColor` yourself, there being no parent map to inherit it from |
 | `MIN_ZOOM_SPAN` | 0.32°, the narrowest box `zoomBbox` will produce |
 | `VIEWS` | The country and its seven provinces, as bounding boxes |
 | `lightTheme` / `darkTheme` | Theme presets |
@@ -614,6 +668,11 @@ anchor with the district's name, not a town's.
   the midpoint only: cheaper, but at z1 it discards ~99% of the raster.
 - `ensureRegions` (default `true`) — guarantees every district visible in the
   viewport gets at least one dot. See below for why this is not optional.
+- `align` — sample on *this* box's dot lattice rather than on `bbox`'s own, so
+  a viewport can move between dots instead of dragging the grid along with it.
+  What makes a pan glide; see "Panning holds the lattice still" above. The
+  sub-cell remainder comes back as `grid.viewBox`, and `align: bbox` is exactly
+  the default.
 - `lang: "en" | "np"` — which script to draw. Falls back per label when the
   requested language is missing, and accessible titles always carry both.
 - `labelPlacement` — where a stop's label goes. `above` (default) is flush
@@ -629,7 +688,8 @@ anchor with the district's name, not a town's.
   and `viewportOpacity`.
 - `inset` — the other half of the pair: put a miniature of the country into a
   corner of *this* map, window and all. `true` for the defaults, or
-  `{ corner, size, margin, height, bbox, background, theme }`. See above.
+  `{ corner, size, margin, height, bbox, background, theme, regionColor }`.
+  Colouring follows the map's own unless overridden. See above.
 - `idPrefix` (default `"naksha-"`) — prefixes the id on each route element, so
   routes come out as `naksha-r0`, `naksha-r1`, … in source order. Give every
   map on a page its own prefix: ids are document-wide, so two maps left on the
@@ -851,7 +911,7 @@ its source.
 ## Testing
 
 ```bash
-npm test          # 112 tests, node:test, no framework
+npm test          # 153 tests, node:test, no framework
 npm run check     # tsc --noEmit
 npm run verify    # re-measure every number this README quotes
 ```

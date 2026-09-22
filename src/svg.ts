@@ -94,6 +94,16 @@ export interface InsetOptions {
    * silhouette out to nothing. Override it here to get it back.
    */
   theme?: Partial<Theme>;
+  /**
+   * Per-district colour, as `RenderOptions.regionColor`.
+   *
+   * Defaults to the map's own, so the miniature is recognisably the same map:
+   * a grey silhouette floating on a coloured field reads as a second, unrelated
+   * thing rather than as a small copy of the one underneath it. Pass
+   * `() => undefined` for a monochrome locator, which is the better read when
+   * the palette is loud enough to compete with the window rectangle.
+   */
+  regionColor?: (regionId: number) => string | undefined;
 }
 
 export interface RenderOptions {
@@ -445,8 +455,9 @@ export function placeLabel(
         // block still has to fit below the first.
         const baseline = bcy + boxH / 2 - HALO - DESCENT * m.size - m.drop;
         const box = labelBox(bcx, baseline, m);
-        if (box.x0 < 0.25 || box.x1 > grid.cols - 0.25) continue;
-        if (box.y0 < 0.25 || box.y1 > grid.rows - 0.25) continue;
+        const frame = grid.viewBox;
+        if (box.x0 < frame.x + 0.25 || box.x1 > frame.x + frame.cols - 0.25) continue;
+        if (box.y0 < frame.y + 0.25 || box.y1 > frame.y + frame.rows - 0.25) continue;
 
         const hit = dotsUnder(grid, box, dotRadius, region);
         const distance = Math.hypot(bcx - cx, bcy - cy);
@@ -496,12 +507,14 @@ export function placeAbove(
 ): { box: LabelBox; anchor: string } {
   let anchor = "middle";
   let tx = cx;
-  if (tx - m.halfWidth < 0.25) {
+  const west = grid.viewBox.x + 0.25;
+  const east = grid.viewBox.x + grid.viewBox.cols - 0.25;
+  if (tx - m.halfWidth < west) {
     anchor = "start";
-    tx = Math.max(0.25, cx - pinRadius);
-  } else if (tx + m.halfWidth > grid.cols - 0.25) {
+    tx = Math.max(west, cx - pinRadius);
+  } else if (tx + m.halfWidth > east) {
     anchor = "end";
-    tx = Math.min(grid.cols - 0.25, cx + pinRadius);
+    tx = Math.min(east, cx + pinRadius);
   }
   return { box: labelBox(tx, cy - pinRadius - 0.35 - m.drop, m), anchor };
 }
@@ -778,10 +791,11 @@ export function viewportRect(
 ): { x: number; y: number; width: number; height: number } | null {
   const nw = project(grid, { lng: bbox.lo, lat: bbox.ha });
   const se = project(grid, { lng: bbox.hi, lat: bbox.la });
-  const x0 = Math.max(0, Math.min(nw.x, grid.cols));
-  const x1 = Math.max(0, Math.min(se.x, grid.cols));
-  const y0 = Math.max(0, Math.min(nw.y, grid.rows));
-  const y1 = Math.max(0, Math.min(se.y, grid.rows));
+  const frame = grid.viewBox;
+  const x0 = Math.max(frame.x, Math.min(nw.x, frame.x + frame.cols));
+  const x1 = Math.max(frame.x, Math.min(se.x, frame.x + frame.cols));
+  const y0 = Math.max(frame.y, Math.min(nw.y, frame.y + frame.rows));
+  const y1 = Math.max(frame.y, Math.min(se.y, frame.y + frame.rows));
   // A viewport entirely outside the overview clips to zero width or height.
   // That would still emit a rectangle, which some renderers stroke as a line,
   // so it is reported as no overlap instead.
@@ -820,6 +834,10 @@ function renderViewport(grid: Grid, theme: Theme, bbox: Bbox): string {
  * Everything inside is expressed in the *inset's* own grid units and the
  * enclosing transform does the shrinking, so the panel, the dots and the window
  * are all described at their natural scale and only one number moves.
+ *
+ * `renderSvg` passes the map's own `regionColor` down as the default, which it
+ * can do because it has both. Called directly there is no parent to inherit
+ * from, so pass it here or the miniature comes out monochrome.
  */
 export function renderInset(grid: Grid, theme: Theme, options: InsetOptions = {}): string {
   const bbox = options.bbox ?? grid.raster.bbox;
@@ -828,14 +846,19 @@ export function renderInset(grid: Grid, theme: Theme, options: InsetOptions = {}
   const margin = options.margin ?? 1;
   const corner = options.corner ?? "top-right";
 
-  const width = grid.cols * size;
+  const frame = grid.viewBox;
+  const width = frame.cols * size;
   const scale = width / inner.cols;
   const height = inner.rows * scale;
   // Padding is in the inner grid's units, so it stays proportional to the dots
   // it surrounds rather than to the map the inset happens to be sitting on.
   const pad = 0.6;
-  const x = corner.endsWith("right") ? grid.cols - margin - width - pad * scale : margin + pad * scale;
-  const y = corner.startsWith("bottom") ? grid.rows - margin - height - pad * scale : margin + pad * scale;
+  const x =
+    frame.x +
+    (corner.endsWith("right") ? frame.cols - margin - width - pad * scale : margin + pad * scale);
+  const y =
+    frame.y +
+    (corner.startsWith("bottom") ? frame.rows - margin - height - pad * scale : margin + pad * scale);
 
   // See `InsetOptions.theme` for why the fade goes.
   const insetTheme: Theme = { ...theme, edgeFade: 0, ...options.theme };
@@ -857,7 +880,7 @@ export function renderInset(grid: Grid, theme: Theme, options: InsetOptions = {}
     `<g class="naksha-inset" transform="translate(${fmt(x)} ${fmt(y)}) scale(${fmt(scale)})"` +
     ` pointer-events="none">` +
     panel +
-    renderDots(inner, insetTheme, {}) +
+    renderDots(inner, insetTheme, { regionColor: options.regionColor }) +
     (zoomed ? renderViewport(inner, insetTheme, grid.bbox) : "") +
     `</g>`
   );
@@ -892,7 +915,10 @@ export function renderSvg(grid: Grid, options: RenderOptions = {}): string {
 
   const attrs = [
     `xmlns="http://www.w3.org/2000/svg"`,
-    `viewBox="0 0 ${grid.cols} ${grid.rows}"`,
+    // The window, not the sampled field: an aligned grid runs up to a dot past
+    // each edge so the viewport can sit between dots, and those extra dots are
+    // meant to be clipped rather than shown.
+    `viewBox="${fmt(grid.viewBox.x)} ${fmt(grid.viewBox.y)} ${fmt(grid.viewBox.cols)} ${fmt(grid.viewBox.rows)}"`,
     options.width !== undefined ? `width="${esc(String(options.width))}"` : "",
     options.height !== undefined ? `height="${esc(String(options.height))}"` : "",
     `role="img"`,
@@ -904,7 +930,9 @@ export function renderSvg(grid: Grid, options: RenderOptions = {}): string {
 
   const background =
     theme.background && theme.background !== "transparent"
-      ? `<rect width="${grid.cols}" height="${grid.rows}" fill="${esc(theme.background)}"/>`
+      ? `<rect x="${fmt(grid.viewBox.x)}" y="${fmt(grid.viewBox.y)}"` +
+        ` width="${fmt(grid.viewBox.cols)}" height="${fmt(grid.viewBox.rows)}"` +
+        ` fill="${esc(theme.background)}"/>`
       : "";
 
   return (
@@ -919,7 +947,12 @@ export function renderSvg(grid: Grid, options: RenderOptions = {}): string {
     // Last, because an inset is an overlay: it has to sit over the field, the
     // routes and the pins it is summarising.
     (options.inset
-      ? renderInset(grid, theme, options.inset === true ? {} : options.inset)
+      ? renderInset(grid, theme, {
+          // The map's own colouring is the default, so the miniature is
+          // recognisably the same map; an explicit one in `inset` wins.
+          regionColor: options.regionColor,
+          ...(options.inset === true ? {} : options.inset),
+        })
       : "") +
     `</svg>`
   );

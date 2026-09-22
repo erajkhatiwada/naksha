@@ -37,13 +37,18 @@ import {
   describePlace,
   clampBbox,
   zoomBbox,
+  panBbox,
   renderInset,
   lightTheme,
   districtBbox,
   bboxSizeKm,
+  aspectWidth,
   NEPAL_BBOX,
   MIN_ZOOM_SPAN,
+  unproject,
+  eventPoint,
   type LabelPlacement,
+  type Bbox,
 } from "../src/index.ts";
 
 /**
@@ -1526,19 +1531,260 @@ describe("zooming a viewport", () => {
   });
 
   test("the box keeps its shape zooming into a corner, where the clamp bites", () => {
-    const start = (NEPAL_BBOX.hi - NEPAL_BBOX.lo) / (NEPAL_BBOX.ha - NEPAL_BBOX.la);
-    let box = NEPAL_BBOX as { lo: number; hi: number; la: number; ha: number };
+    // Shape measured the way the map is actually drawn: `aspectWidth` is what
+    // sets the viewBox, and it narrows a longitude degree by cos(lat). A ratio
+    // of raw degrees says "unchanged" while the rendered map is rescaling, so
+    // this asserts the column count and the ground aspect instead.
+    const start = aspectWidth(NEPAL_BBOX, 40);
+    const ground = (b: Bbox) => {
+      const { width, height } = bboxSizeKm(b);
+      return width / height;
+    };
+    const startGround = ground(NEPAL_BBOX);
+    let box = NEPAL_BBOX as Bbox;
     for (let i = 0; i < 12; i++) {
       box = zoomBbox(box, 1.6, { center: { lng: NEPAL_BBOX.hi, lat: NEPAL_BBOX.ha } });
       assert.ok(inFrame(box), `left the frame at step ${i}`);
-      assert.ok(Math.abs((box.hi - box.lo) / (box.ha - box.la) - start) < 1e-9, "aspect drifted");
+      assert.equal(aspectWidth(box, 40), start, `column count moved at step ${i}`);
+      assert.ok(Math.abs(ground(box) - startGround) < 5e-3, `ground aspect drifted at step ${i}`);
     }
+  });
+
+  test("zooming out lands on the frame, so a panned box can always get back", () => {
+    // Not the largest box of the current shape that fits inside it: `panBbox`
+    // carries a ground width, so a box that has travelled north is a few
+    // percent wider in degrees than the frame. Settling on "as big as this
+    // shape gets" would clip the southern Terai and never open again.
+    const panned = panBbox(zoomBbox(NEPAL_BBOX, 8), { lng: 87.9, lat: 30.3 });
+    let box = panned;
+    for (let i = 0; i < 12; i++) box = zoomBbox(box, 0.5);
+    sameBox(box, NEPAL_BBOX, "zoomed all the way out after a drag");
   });
 
   test("a custom limit is honoured over the national frame", () => {
     const limit = { lo: 85, hi: 86, la: 27, ha: 28 };
     const box = zoomBbox({ lo: 85.4, hi: 85.6, la: 27.4, ha: 27.6 }, 0.01, { limit });
     sameBox(box, limit);
+  });
+});
+
+describe("panning a viewport", () => {
+  const cols = (b: Bbox) => aspectWidth(b, 40);
+  const ground = (b: Bbox) => bboxSizeKm(b);
+
+  test("it centres the box on the point, to the nearest whole dot", () => {
+    const from = { lo: 84, hi: 85, la: 27, ha: 28 };
+    const box = panBbox(from, { lng: 86, lat: 28.5 });
+    // Snapped, not exact: a dot map cannot translate by less than a dot, and
+    // the half-dot it declines to move is the resolution it already admits to.
+    const cellLng = (box.hi - box.lo) / aspectWidth(from, 40);
+    const cellLat = (box.ha - box.la) / 40;
+    assert.ok(Math.abs((box.lo + box.hi) / 2 - 86) <= cellLng / 2 + 1e-9);
+    assert.ok(Math.abs((box.la + box.ha) / 2 - 28.5) <= cellLat / 2 + 1e-9);
+  });
+
+  test("the dot field is the old one shifted, not resampled", () => {
+    // The reported bug, in its second form: the lattice is anchored to the box,
+    // so a box that slides by a fraction of a cell re-samples every cell
+    // against different ground and the silhouette re-forms in place. Measured
+    // before the snap, half a dot of pan changed 387 of 1,990 dots.
+    const raster = nepalRaster();
+    const start = zoomBbox(NEPAL_BBOX, 2);
+    const first = buildGrid(raster, { bbox: start });
+    const cell = (start.hi - start.lo) / first.cols;
+    const centre = { lng: (start.lo + start.hi) / 2, lat: (start.la + start.ha) / 2 };
+    const before = new Map(first.dots.map((d) => [`${d.col},${d.row}`, d.region]));
+
+    for (let sixths = 1; sixths <= 12; sixths++) {
+      const box = panBbox(start, { lng: centre.lng + (sixths / 6) * cell, lat: centre.lat });
+      const grid = buildGrid(raster, { bbox: box });
+      const by = Math.round((box.lo - start.lo) / cell);
+      let compared = 0;
+      for (const d of grid.dots) {
+        const col = d.col + by; // back into the starting field's columns
+        if (col < 0 || col >= first.cols) continue; // arrived from off-screen
+        compared++;
+        assert.equal(
+          before.get(`${col},${d.row}`),
+          d.region,
+          `dot ${d.col},${d.row} changed after panning ${sixths / 6} of a dot`,
+        );
+      }
+      assert.ok(compared > 1000, "expected most of the field to be comparable");
+    }
+  });
+
+  test("the drawn shape does not move, which is the whole point", () => {
+    // The reported bug: dragging the overview made the map's own edges change
+    // shape. A pan that carries the degree span shrinks on the ground as it
+    // goes north, `aspectWidth` answers with fewer columns, and the rendered
+    // map rescales mid-drag.
+    let box: Bbox = zoomBbox(NEPAL_BBOX, 4);
+    const start = cols(box);
+    const seen = new Set<number>();
+    for (let lat = 26.3; lat <= 30.5; lat += 0.05) {
+      for (const lng of [80.1, 84, 88.2]) {
+        box = panBbox(box, { lng, lat });
+        seen.add(cols(box));
+      }
+    }
+    assert.deepEqual([...seen], [start], `column count moved while panning: ${[...seen]}`);
+  });
+
+  test("the same pan the old way does move it — the regression this guards", () => {
+    // Kept as a measurement rather than a claim: `clampBbox` on a hand-rolled
+    // box is the obvious way to write a pan, and it is what the demo and the
+    // README both used to do.
+    const box = zoomBbox(NEPAL_BBOX, 4);
+    const w = box.hi - box.lo;
+    const h = box.ha - box.la;
+    const byDegrees = (lat: number) =>
+      clampBbox({ lo: 84 - w / 2, hi: 84 + w / 2, la: lat - h / 2, ha: lat + h / 2 });
+    const seen = new Set([26.9, 28.4, 29.9].map((lat) => cols(byDegrees(lat))));
+    assert.ok(seen.size > 1, "expected the degree-carrying pan to change the column count");
+  });
+
+  test("the ground size is held to within a column of dots, and the shape exactly", () => {
+    // Not to the last metre: the degree width is kept exactly while it still
+    // draws the same number of columns, because a width that moves every frame
+    // re-phases the lattice the snap exists to pin. The slack is aspectWidth's
+    // own rounding, and the column count — which is what the shape is actually
+    // made of — does not move at all. Swept every 0.01 degree of latitude at
+    // four zooms, the widest drift measured is 0.64 of a column, 0.91%.
+    const box = zoomBbox(NEPAL_BBOX, 4);
+    const before = ground(box);
+    const column = before.width / cols(box);
+    for (let lat = 26.3; lat <= 30.5; lat += 0.05) {
+      const moved = panBbox(box, { lng: 84, lat });
+      const after = ground(moved);
+      assert.ok(
+        Math.abs(after.width - before.width) < column,
+        `ground width moved ${Math.abs(after.width - before.width).toFixed(3)} km at ${lat}`,
+      );
+      assert.ok(Math.abs(after.height - before.height) < 0.05, `ground height moved at ${lat}`);
+      assert.equal(cols(moved), cols(box), `column count moved at ${lat}`);
+    }
+  });
+
+  test("a drag past the border slides back in rather than showing empty frame", () => {
+    for (const to of [
+      { lng: 60, lat: 40 },
+      { lng: 99, lat: 10 },
+      { lng: 84, lat: 99 },
+    ]) {
+      const box = panBbox(zoomBbox(NEPAL_BBOX, 4), to);
+      assert.ok(box.lo >= NEPAL_BBOX.lo - 1e-9 && box.hi <= NEPAL_BBOX.hi + 1e-9, "lng left the frame");
+      assert.ok(box.la >= NEPAL_BBOX.la - 1e-9 && box.ha <= NEPAL_BBOX.ha + 1e-9, "lat left the frame");
+    }
+  });
+
+  test("a custom limit is honoured, and a box that cannot fit it shrinks", () => {
+    const limit = { lo: 85, hi: 86, la: 27, ha: 28 };
+    const inside = panBbox({ lo: 85.2, hi: 85.4, la: 27.2, ha: 27.4 }, { lng: 85.9, lat: 27.9 }, { limit });
+    assert.ok(inside.hi <= limit.hi + 1e-9 && inside.ha <= limit.ha + 1e-9);
+    const big = panBbox(NEPAL_BBOX, { lng: 85.5, lat: 27.5 }, { limit });
+    assert.ok(big.hi - big.lo <= limit.hi - limit.lo + 1e-9);
+    assert.ok(big.ha - big.la <= limit.ha - limit.la + 1e-9);
+  });
+
+  test("panning to where it already is changes nothing", () => {
+    const box = zoomBbox(NEPAL_BBOX, 4);
+    const again = panBbox(box, { lng: (box.lo + box.hi) / 2, lat: (box.la + box.ha) / 2 });
+    for (const k of ["lo", "hi", "la", "ha"] as const) {
+      assert.ok(Math.abs(again[k] - box[k]) < 1e-9, `${k} drifted`);
+    }
+  });
+});
+
+describe("a grid aligned to a lattice", () => {
+  const raster = nepalRaster();
+
+  test("aligning to the viewport itself is exactly the default", () => {
+    const bbox = VIEWS.bagmati;
+    const plain = buildGrid(raster, { bbox });
+    const aligned = buildGrid(raster, { bbox, align: bbox });
+    assert.equal(aligned.cols, plain.cols);
+    assert.equal(aligned.rows, plain.rows);
+    assert.deepEqual(aligned.viewBox, { x: 0, y: 0, cols: plain.cols, rows: plain.rows });
+    assert.equal(aligned.dots.length, plain.dots.length);
+    assert.equal(renderSvg(aligned), renderSvg(plain));
+  });
+
+  test("a plain grid's window is its whole field", () => {
+    const grid = buildGrid(raster, { bbox: VIEWS.nepal });
+    assert.deepEqual(grid.viewBox, { x: 0, y: 0, cols: grid.cols, rows: grid.rows });
+  });
+
+  test("dots keep their ground position as the viewport slides between them", () => {
+    // The whole point. Unaligned, the lattice is anchored to the viewport, so
+    // a box that moves by a fraction of a cell re-samples every cell against
+    // different ground and the silhouette re-forms in place. Aligned, the
+    // dots are pinned to the ground and only the window moves.
+    const lattice = zoomBbox(NEPAL_BBOX, 2);
+    const base = buildGrid(raster, { bbox: lattice, align: lattice });
+    const cell = (lattice.hi - lattice.lo) / base.cols;
+    const home = new Map(base.dots.map((d) => [`${d.lng.toFixed(6)},${d.lat.toFixed(6)}`, d.region]));
+
+    for (let tenths = 1; tenths <= 25; tenths++) {
+      const to = {
+        lng: (lattice.lo + lattice.hi) / 2 + (tenths / 10) * cell,
+        lat: (lattice.la + lattice.ha) / 2,
+      };
+      const grid = buildGrid(raster, { bbox: panBbox(lattice, to, { align: lattice }), align: lattice });
+      let seen = 0;
+      for (const d of grid.dots) {
+        const key = `${d.lng.toFixed(6)},${d.lat.toFixed(6)}`;
+        const was = home.get(key);
+        if (was === undefined) continue; // scrolled in from beyond the first field
+        seen++;
+        assert.equal(was, d.region, `the dot at ${key} changed district after ${tenths / 10} of a cell`);
+      }
+      assert.ok(seen > 1000, `expected the fields to overlap, saw ${seen}`);
+    }
+  });
+
+  test("the window keeps its size and its shape while the box slides", () => {
+    const lattice = zoomBbox(NEPAL_BBOX, 4);
+    const start = buildGrid(raster, { bbox: lattice, align: lattice });
+    for (let lat = 26.4; lat <= 30.4; lat += 0.1) {
+      for (const lng of [80.3, 84, 87.9]) {
+        const box = panBbox(lattice, { lng, lat }, { align: lattice });
+        const grid = buildGrid(raster, { bbox: box, align: lattice });
+        assert.ok(Math.abs(grid.viewBox.cols - start.viewBox.cols) < 1e-9, `cols moved at ${lat}`);
+        assert.ok(Math.abs(grid.viewBox.rows - start.viewBox.rows) < 1e-9, `rows moved at ${lat}`);
+        // And the field always covers the window it is reporting.
+        assert.ok(grid.viewBox.x >= -1e-9 && grid.viewBox.x + grid.viewBox.cols <= grid.cols + 1e-9);
+        assert.ok(grid.viewBox.y >= -1e-9 && grid.viewBox.y + grid.viewBox.rows <= grid.rows + 1e-9);
+      }
+    }
+  });
+
+  test("the field is at most one row and one column bigger than the window", () => {
+    const lattice = zoomBbox(NEPAL_BBOX, 4);
+    for (let lat = 26.4; lat <= 30.4; lat += 0.25) {
+      const grid = buildGrid(raster, {
+        bbox: panBbox(lattice, { lng: 84.3, lat }, { align: lattice }),
+        align: lattice,
+      });
+      assert.ok(grid.cols <= Math.ceil(grid.viewBox.cols) + 1, `field too wide at ${lat}`);
+      assert.ok(grid.rows <= Math.ceil(grid.viewBox.rows) + 1, `field too tall at ${lat}`);
+    }
+  });
+
+  test("the SVG viewBox carries the sub-cell offset, so a pan can glide", () => {
+    const lattice = zoomBbox(NEPAL_BBOX, 2);
+    const cols = buildGrid(raster, { bbox: lattice, align: lattice }).cols;
+    const cell = (lattice.hi - lattice.lo) / cols;
+    const half = {
+      lo: lattice.lo + cell / 2,
+      hi: lattice.hi + cell / 2,
+      la: lattice.la,
+      ha: lattice.ha,
+    };
+    const grid = buildGrid(raster, { bbox: half, align: lattice });
+    assert.ok(Math.abs(grid.viewBox.x - 0.5) < 1e-6, `offset was ${grid.viewBox.x}`);
+    const svg = renderSvg(grid);
+    assert.match(svg, /viewBox="0\.5 0 70 40"/);
   });
 });
 
@@ -1762,5 +2008,146 @@ describe("the inset", () => {
     // window still resolves because the detail box sits inside it.
     const g = groupOf(renderSvg(grid, { inset: { bbox: VIEWS.bagmati } }))!;
     assert.match(g, /naksha-viewport/);
+  });
+});
+
+describe("unprojecting back to a coordinate", () => {
+  const grid = buildGrid(nepalRaster(), { bbox: VIEWS.bagmati });
+
+  test("it is the exact inverse of project, to floating-point", () => {
+    for (const p of [
+      { lng: VIEWS.bagmati.lo, lat: VIEWS.bagmati.ha },
+      { lng: VIEWS.bagmati.hi, lat: VIEWS.bagmati.la },
+      { lng: 85.324, lat: 27.7172 },
+      { lng: 85.0, lat: 27.5 },
+    ]) {
+      const { x, y } = project(grid, p);
+      const back = unproject(grid, x, y);
+      assert.ok(Math.abs(back.lng - p.lng) < 1e-12, `lng ${back.lng} vs ${p.lng}`);
+      assert.ok(Math.abs(back.lat - p.lat) < 1e-12, `lat ${back.lat} vs ${p.lat}`);
+    }
+  });
+
+  test("the corners of the viewBox are the corners of the box", () => {
+    const nw = unproject(grid, 0, 0);
+    const se = unproject(grid, grid.cols, grid.rows);
+    assert.ok(Math.abs(nw.lng - grid.bbox.lo) < 1e-12);
+    assert.ok(Math.abs(nw.lat - grid.bbox.ha) < 1e-12);
+    assert.ok(Math.abs(se.lng - grid.bbox.hi) < 1e-12);
+    assert.ok(Math.abs(se.lat - grid.bbox.la) < 1e-12);
+  });
+
+  test("it is unquantised, so zoom-at-cursor does not snap to a dot centre", () => {
+    // Two points inside the same cell must not answer with the same
+    // coordinate: rounding to the dot would drift a zoom by half a cell.
+    const a = unproject(grid, 10.1, 10.1);
+    const b = unproject(grid, 10.9, 10.9);
+    assert.notEqual(a.lng, b.lng);
+    assert.notEqual(a.lat, b.lat);
+    // And it need not land on the field at all — a gesture off the map still
+    // has a coordinate, which is what `clampBbox` is then for.
+    const off = unproject(grid, -5, -5);
+    assert.ok(off.lng < grid.bbox.lo);
+    assert.ok(off.lat > grid.bbox.ha);
+  });
+});
+
+describe("a pointer event in viewBox coordinates", () => {
+  /**
+   * An `<svg>` whose screen transform is a real scale-and-translate, so a test
+   * can tell `eventPoint` apart from "returns clientX untouched".
+   *
+   * Node has no `DOMPoint`, so this exercises the `createSVGPoint` fallback —
+   * which is the branch that matters, since it is the one old WebKit takes.
+   */
+  function svgAt(scale: number, dx: number, dy: number) {
+    const ctm = {
+      inverse: () => ({
+        apply: (x: number, y: number) => ({ x: (x - dx) / scale, y: (y - dy) / scale }),
+      }),
+    };
+    return {
+      getScreenCTM: () => ctm,
+      createSVGPoint() {
+        return {
+          x: 0,
+          y: 0,
+          matrixTransform(this: { x: number; y: number }, m: { apply: (x: number, y: number) => unknown }) {
+            return m.apply(this.x, this.y);
+          },
+        };
+      },
+    } as unknown as SVGSVGElement;
+  }
+
+  test("the screen transform is applied, not ignored", () => {
+    // The map is drawn at 2x and offset 40px right, 12px down the page.
+    const at = eventPoint(svgAt(2, 40, 12), { clientX: 140, clientY: 112 } as MouseEvent);
+    assert.deepEqual(at, { x: 50, y: 50 });
+  });
+
+  test("an element with no transform yet answers null rather than NaN", () => {
+    const detached = { getScreenCTM: () => null } as unknown as SVGSVGElement;
+    assert.equal(eventPoint(detached, { clientX: 1, clientY: 1 } as MouseEvent), null);
+  });
+
+  test("it feeds hitTest and unproject in the same units", () => {
+    const grid = buildGrid(nepalRaster(), { bbox: VIEWS.bagmati });
+    // Aim at the centre of a dot that exists, through a 3x transform.
+    const dot = grid.dots[100];
+    const svg = svgAt(3, 7, 9);
+    const at = eventPoint(svg, {
+      clientX: (dot.col + 0.5) * 3 + 7,
+      clientY: (dot.row + 0.5) * 3 + 9,
+    } as MouseEvent)!;
+    assert.equal(hitTest(grid, at.x, at.y)?.region, dot.region);
+    const back = unproject(grid, at.x, at.y);
+    assert.ok(Math.abs(back.lng - dot.lng) < 1e-9);
+    assert.ok(Math.abs(back.lat - dot.lat) < 1e-9);
+  });
+});
+
+describe("the inset's colouring", () => {
+  const detail = () => buildGrid(nepalRaster(), { bbox: VIEWS.bagmati });
+  const groupOf = (svg: string) => {
+    const i = svg.indexOf('<g class="naksha-inset"');
+    return i === -1 ? null : svg.slice(i);
+  };
+  const fillsIn = (svg: string) => new Set([...svg.matchAll(/fill="(#[0-9a-f]{6})"/gi)].map((m) => m[1]));
+  const red = () => "#ff0000";
+
+  test("it inherits the map's own regionColor, so the miniature matches", () => {
+    const g = groupOf(renderSvg(detail(), { regionColor: red, inset: { background: "#ffffff" } }))!;
+    assert.ok(fillsIn(g).has("#ff0000"));
+  });
+
+  test("an explicit regionColor on the inset wins over the map's", () => {
+    const g = groupOf(
+      renderSvg(detail(), {
+        regionColor: red,
+        inset: { background: "#ffffff", regionColor: () => "#00ff00" },
+      }),
+    )!;
+    const fills = fillsIn(g);
+    assert.ok(fills.has("#00ff00"));
+    assert.ok(!fills.has("#ff0000"));
+  });
+
+  test("returning undefined opts back out to a monochrome locator", () => {
+    const g = groupOf(
+      renderSvg(detail(), {
+        regionColor: red,
+        inset: { background: "#ffffff", regionColor: () => undefined },
+      }),
+    )!;
+    assert.ok(!fillsIn(g).has("#ff0000"));
+    assert.ok(fillsIn(g).has(lightTheme.dot));
+  });
+
+  test("renderInset on its own has no parent to inherit from", () => {
+    // The default is `renderSvg` handing its own option down; called directly
+    // there is nothing to hand down, so the caller passes it or gets the theme.
+    assert.ok(!fillsIn(renderInset(detail(), lightTheme, {})).has("#ff0000"));
+    assert.ok(fillsIn(renderInset(detail(), lightTheme, { regionColor: red })).has("#ff0000"));
   });
 });
