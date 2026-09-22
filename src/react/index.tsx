@@ -9,7 +9,7 @@
  * Region and dot events come from `attachInteractions`, which hit-tests
  * geometrically. That is why the dot field stays collapsed even when
  * `onRegionClick` or `onDotEnter` is set: an earlier version switched to
- * `dots: "circles"` so there was something to click, and paid ~1130 DOM nodes
+ * `dots: "circles"` so there was something to click, and paid ~1110 DOM nodes
  * for it.
  */
 import { useEffect, useMemo, useRef, type CSSProperties, type ReactNode } from "react";

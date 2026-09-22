@@ -3,7 +3,7 @@
  *
  * The dot field collapses to one `<path>` per colour, so there is no per-dot
  * element to hang a listener on. Giving that up is expensive — `dots:
- * "circles"` costs ~1130 nodes instead of ~2 — so region hits are resolved
+ * "circles"` costs ~1110 nodes instead of ~2 — so region hits are resolved
  * *geometrically* instead: the viewBox is `0 0 cols rows`, so the cell under
  * the pointer is exactly `floor(x), floor(y)` and one Map lookup answers which
  * dot, and therefore which district, is there. Hit-testing is O(1) and the DOM

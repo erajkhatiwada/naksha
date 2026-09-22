@@ -51,7 +51,7 @@ export interface Grid {
    * The raster this grid was sampled from.
    *
    * Kept because a dot's region is a *plurality vote* over its whole cell —
-   * ~130 km² at the national view — while the raster answers for an exact
+   * ~134 km² at the national view — while the raster answers for an exact
    * point. Near a border the two disagree, and anything pinning a real
    * coordinate needs the finer answer to snap honestly (see `snapPoint`).
    */
@@ -64,7 +64,7 @@ export interface GridOptions {
   /**
    * Rows of dots.
    *
-   * 40 is the default: ~1130 dots, which is the density the look is built
+   * 40 is the default: ~1110 dots, which is the density the look is built
    * around. Note that no sane height separates every district HQ — Kathmandu
    * and Lalitpur are 3.2 km apart, so guaranteeing them distinct dots at a
    * national view would need ~250 rows. Collisions at z1 are expected and are
@@ -91,9 +91,10 @@ export interface GridOptions {
    * is too small to win a cell outright (default true).
    *
    * Without this, districts smaller than one cell vanish: at height 40 a cell
-   * is ~130 km² and Bhaktapur is ~119 km², so it is never the plurality
-   * anywhere and silently disappears from the national view — making it
-   * impossible to highlight or click.
+   * is ~134 km² and Bhaktapur is ~119 km², so it is the plurality of a cell only
+   * when the grid phase happens to favour it. At 5 of 40 sub-cell offsets of the
+   * national frame it wins none and silently disappears — making it impossible
+   * to highlight or click.
    */
   ensureRegions?: boolean;
   /**
@@ -113,9 +114,8 @@ export interface GridOptions {
    * gesture, the border stops shimmering, and the viewport is free to sit
    * between dots.
    *
-   * Costs one extra row and column of cells — 71x41 against 70x40, 4% of the
-   * budget. `align: bbox` is exactly the default, so passing the viewport
-   * itself changes nothing at all.
+   * Costs one extra row and column of cells. `align: bbox` is exactly the
+   * default, so passing the viewport itself changes nothing at all.
    */
   align?: Bbox;
 }
@@ -147,11 +147,35 @@ export function buildGrid(raster: RegionRaster, options: GridOptions = {}): Grid
   // are the same rectangle unless `align` moves the lattice off the viewport,
   // in which case the field grows by up to one dot on each side and the
   // remainder becomes the viewBox origin.
-  const { bbox, cols, rows, viewBox } = layout(view, height, options.align);
+  const { bbox, cols, rows, viewBox, lattice } = layout(view, height, options.align);
   const spanLng = bbox.hi - bbox.lo;
   const spanLat = bbox.ha - bbox.la;
   const k = sampling === "center" ? 1 : subSamples(raster, cols);
   const samplesPerCell = k * k;
+
+  // Sub-sample positions, one row of them per cell edge. Aligned, each is
+  // derived from the lattice origin and the cell's *global* index rather than
+  // from the field's edge: the same ground cell then samples bit-identical
+  // coordinates on every frame of a pan. Measured from the edge instead, the
+  // rounding differs whenever the window moves, and at zoom 2 a sub-sample
+  // spacing of exactly 1.6 raster rows puts every fifth sample on a pixel
+  // boundary — so border dots flipped district as the map was dragged.
+  const sampleLng = new Float64Array(cols * k);
+  const sampleLat = new Float64Array(rows * k);
+  for (let col = 0; col < cols; col++) {
+    for (let sx = 0; sx < k; sx++) {
+      sampleLng[col * k + sx] = lattice
+        ? lattice.lo + (lattice.col0 + col + (sx + 0.5) / k) * lattice.cellLng
+        : bbox.lo + ((col + (sx + 0.5) / k) * spanLng) / cols;
+    }
+  }
+  for (let row = 0; row < rows; row++) {
+    for (let sy = 0; sy < k; sy++) {
+      sampleLat[row * k + sy] = lattice
+        ? lattice.ha - (lattice.row0 + row + (sy + 0.5) / k) * lattice.cellLat
+        : bbox.ha - ((row + (sy + 0.5) / k) * spanLat) / rows;
+    }
+  }
 
   const dots: Dot[] = [];
   const regions = new Set<number>();
@@ -169,10 +193,9 @@ export function buildGrid(raster: RegionRaster, options: GridOptions = {}): Grid
       seen.length = 0;
 
       for (let sy = 0; sy < k; sy++) {
-        const lat = bbox.ha - ((row + (sy + 0.5) / k) * spanLat) / rows;
+        const lat = sampleLat[row * k + sy];
         for (let sx = 0; sx < k; sx++) {
-          const lng = bbox.lo + ((col + (sx + 0.5) / k) * spanLng) / cols;
-          const v = raster.sampleAt(lng, lat);
+          const v = raster.sampleAt(sampleLng[col * k + sx], lat);
           if (v === OUTSIDE) continue;
           if (tally[v] === 0) seen.push(v);
           tally[v]++;
@@ -234,7 +257,14 @@ function layout(
   view: Bbox,
   height: number,
   align?: Bbox,
-): { bbox: Bbox; cols: number; rows: number; viewBox: Grid["viewBox"] } {
+): {
+  bbox: Bbox;
+  cols: number;
+  rows: number;
+  viewBox: Grid["viewBox"];
+  /** The lattice origin and the field's offset on it, in whole cells. */
+  lattice?: { lo: number; ha: number; cellLng: number; cellLat: number; col0: number; row0: number };
+} {
   const cols = Math.max(1, aspectWidth(view, height));
   if (!align) {
     return { bbox: view, cols, rows: height, viewBox: { x: 0, y: 0, cols, rows: height } };
@@ -245,8 +275,10 @@ function layout(
   // Floor, so the field starts on or before the viewport's own edge and the
   // remainder is never negative — a viewBox origin outside the field would
   // show blank where the map should be.
-  const lo = align.lo + Math.floor((view.lo - align.lo) / cellLng) * cellLng;
-  const ha = align.ha - Math.floor((align.ha - view.ha) / cellLat) * cellLat;
+  const col0 = Math.floor((view.lo - align.lo) / cellLng);
+  const row0 = Math.floor((align.ha - view.ha) / cellLat);
+  const lo = align.lo + col0 * cellLng;
+  const ha = align.ha - row0 * cellLat;
   const fieldCols = Math.max(1, Math.ceil((view.hi - lo) / cellLng - 1e-9));
   const fieldRows = Math.max(1, Math.ceil((ha - view.la) / cellLat - 1e-9));
 
@@ -254,6 +286,7 @@ function layout(
     bbox: { lo, hi: lo + fieldCols * cellLng, ha, la: ha - fieldRows * cellLat },
     cols: fieldCols,
     rows: fieldRows,
+    lattice: { lo: align.lo, ha: align.ha, cellLng, cellLat, col0, row0 },
     viewBox: {
       x: (view.lo - lo) / cellLng,
       y: (ha - view.ha) / cellLat,
@@ -325,12 +358,12 @@ export function isInsideGrid(grid: Grid, col: number, row: number): boolean {
  * units.
  *
  * One dot spacing, which is the map's whole resolution: a dot at the national
- * view stands for ~130 km², so no pin on it was ever a claim finer than that.
+ * view stands for ~134 km², so no pin on it was ever a claim finer than that.
  * Moving within one spacing therefore says nothing the map was not already
  * saying, while moving further would invent a position. Measured over the 121
  * real coordinates this repo holds — 74 district headquarters and the demo's
  * 47 towns — every point that needs correcting finds its own district within
- * **0.79** units, so the cap never binds on real data. It exists to fail
+ * **0.71** units, so the cap never binds on real data. It exists to fail
  * closed on the case that would be a lie, not to tune the common one.
  */
 const SNAP_REACH = 1;
@@ -341,11 +374,11 @@ const SNAP_REACH = 1;
  * Normally the dot in the point's own cell. The exception is the one that
  * matters: a dot's region is the district covering *most* of its cell, so a
  * town sitting near a district border routinely lands on a dot painted as its
- * neighbour — Lahan is in Siraha, but its cell is mostly Saptari, and a pin
+ * neighbour — Butwal is in Rupandehi, but its cell is mostly Palpa, and a pin
  * there contradicts its own label and every district colouring around it.
  * Nepali settlements sit on borders far more often than not (highway towns,
- * river crossings, valley mouths), so this is not an exotic edge: 12 of the
- * 121 real coordinates in this repo hit it, Lalitpur and Siraha's own
+ * river crossings, valley mouths), so this is not an exotic edge: 6 of the
+ * 121 real coordinates in this repo hit it, Bhaktapur's and Jajarkot's own
  * headquarters among them.
  *
  * When the cell's dot disagrees with the raster's answer *at the point*, the
@@ -475,10 +508,10 @@ const ANCHORS = new WeakMap<Grid, Map<number, Dot>>();
  * The dot that stands for a region — use it to point *at a district*.
  *
  * **This is not a location for a place inside the region.** Measured against 30
- * real Nepali towns with known coordinates, the anchor lands on the same dot as
- * the town only 10% of the time; the median miss is 15 km and the worst is
- * 40 km. Nepali settlements cluster on district edges — border crossings, the
- * Terai highway, river valleys — while a centre of mass sits inland. Label this
+ * real Nepali towns with known coordinates, the anchor usually lands on a
+ * different dot from the town. Nepali settlements cluster on district edges —
+ * border crossings, the Terai highway, river valleys — while a centre of mass
+ * sits inland. Label this
  * dot with the *district's* name. Labelling it with a town's name places that
  * town somewhere it isn't.
  *

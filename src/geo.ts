@@ -22,6 +22,8 @@ export interface Bbox {
  * Rounded outward from the real 77-district geometry so it contains the source
  * data with a small margin:
  *   districts77  lng 80.058585..88.201668   lat 26.347837..30.447277
+ *   + Darchula per the 2020 official map, whose Limpiyadhura corner sets the
+ *     northern edge at lat 30.473111
  *
  * Deliberately NOT the bbox of world.geo.json's 23-vertex NPL outline
  * (80.088425..88.174804, 26.397898..30.422717) — that polygon's extremes were
@@ -31,7 +33,7 @@ export const NEPAL_BBOX: Bbox = Object.freeze({
   lo: 80.05,
   hi: 88.21,
   la: 26.34,
-  ha: 30.45,
+  ha: 30.48,
 });
 
 /** Mean Earth radius, km. */
@@ -122,10 +124,10 @@ export function fitAspect(bbox: Bbox, targetAspect: number): Bbox {
 /**
  * Narrowest longitude span `zoomBbox` will zoom in to, in degrees.
  *
- * Not a taste knob — it is where the raster runs out. The bitmap is 1788x1024
- * over the national frame, 0.447 km/cell, and at the national aspect and the
- * default grid height a 0.32° box samples **0.447 km/dot**: one dot per raster
- * cell, measured. Going narrower upsamples the bitmap, so the dots get blockier
+ * Not a taste knob — it is where the raster runs out. The bitmap is 1775x1024
+ * over the national frame, 0.450 km/cell, and at the national aspect and the
+ * default grid height a 0.32° box samples **0.454 km/dot**: one dot per raster
+ * cell (1.01), measured. Going narrower upsamples the bitmap, so the dots get blockier
  * instead of the map getting finer.
  *
  * Note this is well past the point where a viewport still looks like Nepal —
@@ -248,10 +250,10 @@ export interface PanOptions {
    * rather than to the box, so the viewport is free to slide continuously
    * between dots, and holding its degree span holds the drawn shape outright —
    * the window is a constant number of cells wide because the cells no longer
-   * move — measured, exactly 70 x 40 at every latitude and longitude the demo
+   * move — measured, exactly 69 x 40 at every latitude and longitude the demo
    * can reach, at every zoom. The price is that the cell's ground size now
-   * varies with latitude instead of the column count: **up to 3.4%** across a
-   * full-country pan, against a viewport that already uses a single cos(lat)
+   * varies with latitude instead of the column count across a full-country
+   * pan, against a viewport that already uses a single cos(lat)
    * for its whole height. It is the standard-parallel approximation the map is
    * already built on, moved from per-viewport to per-gesture.
    */

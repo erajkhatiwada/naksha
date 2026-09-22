@@ -732,7 +732,7 @@ function defaultHint(): string {
   if (state.mode === "districts") {
     return (
       `Colour is by province, but the grid carries <em>district</em> identity. Hits resolve from ` +
-      `the pointer's cell, not from the DOM — so this is interactive at <b>24 nodes</b>.` + verb()
+      `the pointer's cell, not from the DOM — so interaction adds no per-dot elements.` + verb()
     );
   }
   if (state.mode === "find") {
@@ -1317,7 +1317,7 @@ cornerSelect.addEventListener("change", () => {
  * Open a district's own bounds out to the zoom floor if it is smaller.
  *
  * Two of the 77 need it: padded for breathing room, Bhaktapur's box spans
- * 0.209° and Lalitpur's 0.255°, against a floor of 0.32°. Framing them exactly
+ * 0.217° and Lalitpur's 0.262°, against a floor of 0.32°. Framing them exactly
  * would sample finer than the raster and the dots would go blocky, so the box
  * opens about its centre — the district stays framed, with more of its
  * neighbours showing than asked for.
@@ -1470,10 +1470,9 @@ minimapMap.addEventListener("pointermove", (e) => {
   if (!to) return;
   pendingTo = { lng: to.lng + grab.lng, lat: to.lat + grab.lat };
   // Coalesced to one render per frame. A pointer fires well above 60 Hz, and
-  // every move here rebuilds the grid, the SVG and the interaction layer —
-  // 2.5 ms median, measured in the page. A 60-move burst collapses to a single
-  // render this way; unthrottled it would be 60, or 150 ms of work inside one
-  // 16.7 ms frame.
+  // every move here rebuilds the grid, the SVG and the interaction layer. A
+  // 60-move burst collapses to a single render this way; unthrottled it would
+  // be 60 inside one 16.7 ms frame.
   frame ||= requestAnimationFrame(() => {
     frame = 0;
     if (pendingTo) slideBbox(viewportOn(pendingTo));
