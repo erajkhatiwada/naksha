@@ -64,6 +64,21 @@ export interface Theme {
   leaderWidth: number;
   leaderOpacity: number;
   /**
+   * The rectangle an overview map draws to show where a detail view is looking
+   * (`RenderOptions.viewport`).
+   *
+   * Its own colour rather than the label's: on a minimap the outline is the
+   * only thing competing with the dots, and a consumer who dims the field to
+   * make the window pop should not have to dim their place names with it.
+   */
+  viewport: string;
+  viewportWidth: number;
+  /**
+   * Tint inside the rectangle, as an opacity on `viewport`'s own colour.
+   * 0 leaves the window hollow, which reads better over a dense field.
+   */
+  viewportOpacity: number;
+  /**
    * Font stack for all rendered text.
    *
    * Includes Devanagari faces explicitly. `system-ui` alone does not cover
@@ -105,6 +120,9 @@ export const lightTheme: Theme = {
   leader: "#0f172a",
   leaderWidth: 0.06,
   leaderOpacity: 0.45,
+  viewport: "#0f172a",
+  viewportWidth: 0.3,
+  viewportOpacity: 0.1,
   fontFamily: DEFAULT_FONT_STACK,
 };
 
@@ -119,6 +137,7 @@ export const darkTheme: Theme = {
   clusterLabel: "#0b1120",
   label: "#e2e8f0",
   leader: "#e2e8f0",
+  viewport: "#e2e8f0",
 };
 
 export function resolveTheme(theme?: Partial<Theme>, base: Theme = lightTheme): Theme {

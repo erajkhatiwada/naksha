@@ -14,7 +14,15 @@ import { resolve } from "node:path";
 import { RegionRaster } from "../src/raster.ts";
 import { DISTRICT_RASTER, DISTRICTS } from "../src/generated/districts.ts";
 import { buildGrid, cellAt, dotIndex, project, regionAnchor, snapPoint } from "../src/grid.ts";
-import { bboxSizeKm, distanceKm, type LngLat } from "../src/geo.ts";
+import {
+  bboxSizeKm,
+  distanceKm,
+  padBbox,
+  zoomBbox,
+  clampBbox,
+  MIN_ZOOM_SPAN,
+  type LngLat,
+} from "../src/geo.ts";
 import {
   measureLabel,
   placeAbove,
@@ -271,6 +279,99 @@ for (const [label, bbox] of Object.entries(VIEWS)) {
 }
 console.log("\nThe cap is one dot spacing — the map's own resolution, so a correction");
 console.log("inside it claims nothing the dot field was not already claiming.");
+
+// ------------------------------------------------------------ zoom bounds ---
+rule("Zoom: a bbox ladder, bounded at both ends (spec §6)");
+console.log("Every step re-samples its own box at the same dot budget, so ground");
+console.log("resolution moves while dot count and render cost stay put.\n");
+console.log("step   lng span   cols x rows   dots   km/dot   districts   cells/dot");
+{
+  let box = raster.bbox;
+  for (let i = 0; i <= 8; i++) {
+    const g = buildGrid(raster, { bbox: box });
+    console.log(
+      `${String(i).padStart(4)}   ${(box.hi - box.lo).toFixed(4).padStart(8)}   ` +
+        `${`${g.cols} x ${g.rows}`.padEnd(11)}   ${String(g.dots.length).padStart(4)}   ` +
+        `${g.kmPerDot.toFixed(3).padStart(6)}   ${String(g.regions.size).padStart(9)}   ` +
+        `${(g.kmPerDot / raster.cellSizeKm).toFixed(2).padStart(9)}`,
+    );
+    box = zoomBbox(box, 2);
+  }
+}
+const floorBox = (() => {
+  let box = raster.bbox;
+  for (let i = 0; i < 20; i++) box = zoomBbox(box, 2);
+  return box;
+})();
+const floorGrid = buildGrid(raster, { bbox: floorBox });
+console.log(
+  `\nfloor  MIN_ZOOM_SPAN ${MIN_ZOOM_SPAN}° -> ${floorGrid.kmPerDot.toFixed(3)} km/dot against ` +
+    `${raster.cellSizeKm.toFixed(3)} km/cell` +
+    ` (${(floorGrid.kmPerDot / raster.cellSizeKm).toFixed(2)} cells/dot)`,
+);
+console.log(`       held: 20 zoom-ins land on ${(floorBox.hi - floorBox.lo).toFixed(4)}° and stop`);
+{
+  let box = raster.bbox;
+  for (let i = 0; i < 9; i++) box = zoomBbox(box, 2);
+  for (let i = 0; i < 9; i++) box = zoomBbox(box, 0.5);
+  const drift = Math.max(
+    Math.abs(box.lo - raster.bbox.lo),
+    Math.abs(box.hi - raster.bbox.hi),
+    Math.abs(box.la - raster.bbox.la),
+    Math.abs(box.ha - raster.bbox.ha),
+  );
+  console.log(`       round trip: 9 in, 9 out returns the frame to ${(drift * 111320).toExponential(1)} m`);
+  let corner = raster.bbox;
+  const a0 = (raster.bbox.hi - raster.bbox.lo) / (raster.bbox.ha - raster.bbox.la);
+  let worst = 0;
+  let escaped = 0;
+  for (let i = 0; i < 12; i++) {
+    corner = zoomBbox(corner, 1.6, { center: { lng: raster.bbox.hi, lat: raster.bbox.ha } });
+    worst = Math.max(worst, Math.abs((corner.hi - corner.lo) / (corner.ha - corner.la) - a0));
+    if (clampBbox(corner).lo !== corner.lo) escaped++;
+  }
+  console.log(`       into the NE corner: aspect drift ${worst.toExponential(1)}, left the frame ${escaped} times`);
+}
+
+console.log("\ninset dot budgets (RenderOptions.inset):");
+for (const h of [10, 12, 14, 16]) {
+  const g = buildGrid(raster, { bbox: raster.bbox, height: h });
+  console.log(
+    `  height ${String(h).padStart(2)}   ${`${g.cols} x ${g.rows}`.padEnd(9)} ` +
+      `${String(g.dots.length).padStart(4)} dots   ${String(g.regions.size).padStart(2)}/${DISTRICTS.length} districts` +
+      (h === 12 ? "   <- default" : ""),
+  );
+}
+
+// --------------------------------------------------------- district bounds ---
+rule("District bounds: the box to zoom to when one is picked");
+t = performance.now();
+const firstBox = raster.regionBbox(DISTRICTS[0].id);
+const boundsMs = performance.now() - t;
+const boxes = DISTRICTS.map((d) => ({ d, box: raster.regionBbox(d.id)! }));
+const missing = boxes.filter((b) => !b.box);
+let hqIn = 0;
+let hqTotal = 0;
+for (const { d, box } of boxes) {
+  if (!d.hqAt) continue;
+  hqTotal++;
+  if (d.hqAt.lng >= box.lo && d.hqAt.lng <= box.hi && d.hqAt.lat >= box.la && d.hqAt.lat <= box.ha) hqIn++;
+}
+console.log(`${boxes.length - missing.length}/${DISTRICTS.length} districts resolve, all 77 built in ` +
+  `${boundsMs.toFixed(1)} ms on the first call (one pass, then memoised)`);
+console.log(`${hqIn}/${hqTotal} known HQs fall inside their own district's box` +
+  (firstBox ? "" : "  -- FIRST LOOKUP FAILED"));
+const narrow = boxes
+  .map(({ d, box }) => ({ name: d.name, span: box.hi - box.lo, padded: padBbox(box, 0.12).hi - padBbox(box, 0.12).lo }))
+  .sort((a, b) => a.span - b.span);
+console.log(`\nnarrowest boxes, against the ${MIN_ZOOM_SPAN}° zoom floor:`);
+for (const n of narrow.slice(0, 4)) {
+  console.log(
+    `  ${n.name.padEnd(16)} ${n.span.toFixed(4)}°   padded 12% ${n.padded.toFixed(4)}°` +
+      (n.padded < MIN_ZOOM_SPAN ? "  <- below the floor, must be opened out" : ""),
+  );
+}
+console.log(`  widest: ${narrow.at(-1)!.name} at ${narrow.at(-1)!.span.toFixed(3)}°`);
 
 // ---------------------------------------------------------------- arc math ---
 rule("Arc height must be non-linear (spec §10)");

@@ -8,7 +8,8 @@
  * every size in the theme is resolution-independent (spec §10).
  */
 import type { Grid, Dot } from "./grid.ts";
-import { dotIndex, isInsideGrid } from "./grid.ts";
+import { dotIndex, isInsideGrid, project, buildGrid } from "./grid.ts";
+import type { Bbox } from "./geo.ts";
 import type { Theme } from "./theme.ts";
 import { resolveTheme } from "./theme.ts";
 import type { Route, ArcOptions } from "./route.ts";
@@ -49,6 +50,61 @@ import { pickLabel, bothLabels } from "./i18n.ts";
  * stacked block as one box — see `labels`.
  */
 export type LabelPlacement = "above" | "avoid-region" | "clear" | "none";
+
+/**
+ * A miniature of the whole country, inset into a corner of the map itself.
+ *
+ * Named apart from `viewport` on purpose, because the two are the halves of an
+ * overview-plus-detail pair and are easy to confuse: `viewport` is for a map
+ * that *is* the overview, and draws the window for some other view. `inset` is
+ * for the detail map, and puts the whole overview inside it.
+ *
+ * The alternative to rendering a second map beside this one: everything stays
+ * in a single SVG string, so it survives being written to a file, emailed,
+ * printed or server-rendered, with no second element to position and no CSS.
+ * Reach for the separate-element pattern instead when the overview has to be
+ * interactive — dragged, clicked, given its own controls — because that needs a
+ * DOM this renderer does not touch.
+ */
+export interface InsetOptions {
+  /** Which corner it sits in. Default `"top-right"`. */
+  corner?: "top-left" | "top-right" | "bottom-left" | "bottom-right";
+  /** Width as a fraction of the map's own width. Default 0.22. */
+  size?: number;
+  /** Gap from the map's edges, in dot units. Default 1. */
+  margin?: number;
+  /** The area it covers. Defaults to the raster's full extent — all of Nepal. */
+  bbox?: Bbox;
+  /** Rows of dots in the inset's own grid. Default 12, about 105 dots. */
+  height?: number;
+  /**
+   * Panel fill behind it, so the map's own dots don't show through.
+   *
+   * Defaults to the theme's background. **If that is `"transparent"` — which it
+   * is whenever the map is drawn straight onto a page — pass a colour here, or
+   * the inset is see-through and unreadable over the field.**
+   */
+  background?: string;
+  /**
+   * Theme overrides for the inset alone, merged over the map's own theme.
+   *
+   * The inset already forces `edgeFade: 0`, which is a difference in kind
+   * rather than taste: fading partly-covered cells softens a border at 40 rows,
+   * but at 12 rows most of the country *is* edge, so the same rule washes the
+   * silhouette out to nothing. Override it here to get it back.
+   */
+  theme?: Partial<Theme>;
+  /**
+   * Per-district colour, as `RenderOptions.regionColor`.
+   *
+   * Defaults to the map's own, so the miniature is recognisably the same map:
+   * a grey silhouette floating on a coloured field reads as a second, unrelated
+   * thing rather than as a small copy of the one underneath it. Pass
+   * `() => undefined` for a monochrome locator, which is the better read when
+   * the palette is loud enough to compete with the window rectangle.
+   */
+  regionColor?: (regionId: number) => string | undefined;
+}
 
 export interface RenderOptions {
   theme?: Partial<Theme>;
@@ -96,6 +152,32 @@ export interface RenderOptions {
   /** Optional width/height attributes. Omit for a fluid, container-sized SVG. */
   width?: number | string;
   height?: number | string;
+  /**
+   * Draw a rectangle showing where another viewport is looking — the overview
+   * half of an overview-plus-detail pair.
+   *
+   * Pass the *detail* map's bbox to a map rendered over a wider one, usually
+   * `NEPAL_BBOX` at a small `height`. It is only ever a drawn rectangle: this
+   * does not link the two maps, and nothing here reads back from it.
+   *
+   * Clipped to the frame, so a viewport reaching past the overview's own box
+   * shows the part that overlaps rather than painting outside the viewBox.
+   *
+   * This is the option for a map that *is* an overview — a second, wider map
+   * drawn beside this one. To put a miniature *inside* this map's own corner
+   * instead, see `inset`.
+   */
+  viewport?: Bbox;
+  /**
+   * Inset a miniature of the whole country into a corner of this map, with the
+   * current viewport marked on it — an overview and a detail view in one SVG.
+   *
+   * `true` accepts every default: top-right, 22% of the width, one dot unit in
+   * from the edges. The window is drawn only when this map is actually looking
+   * at a sub-region; at full extent there is nothing to mark and the inset is
+   * just the country.
+   */
+  inset?: boolean | InsetOptions;
   /** Prefix for generated ids, so multiple maps can share a page. */
   idPrefix?: string;
 }
@@ -373,8 +455,9 @@ export function placeLabel(
         // block still has to fit below the first.
         const baseline = bcy + boxH / 2 - HALO - DESCENT * m.size - m.drop;
         const box = labelBox(bcx, baseline, m);
-        if (box.x0 < 0.25 || box.x1 > grid.cols - 0.25) continue;
-        if (box.y0 < 0.25 || box.y1 > grid.rows - 0.25) continue;
+        const frame = grid.viewBox;
+        if (box.x0 < frame.x + 0.25 || box.x1 > frame.x + frame.cols - 0.25) continue;
+        if (box.y0 < frame.y + 0.25 || box.y1 > frame.y + frame.rows - 0.25) continue;
 
         const hit = dotsUnder(grid, box, dotRadius, region);
         const distance = Math.hypot(bcx - cx, bcy - cy);
@@ -424,12 +507,14 @@ export function placeAbove(
 ): { box: LabelBox; anchor: string } {
   let anchor = "middle";
   let tx = cx;
-  if (tx - m.halfWidth < 0.25) {
+  const west = grid.viewBox.x + 0.25;
+  const east = grid.viewBox.x + grid.viewBox.cols - 0.25;
+  if (tx - m.halfWidth < west) {
     anchor = "start";
-    tx = Math.max(0.25, cx - pinRadius);
-  } else if (tx + m.halfWidth > grid.cols - 0.25) {
+    tx = Math.max(west, cx - pinRadius);
+  } else if (tx + m.halfWidth > east) {
     anchor = "end";
-    tx = Math.min(grid.cols - 0.25, cx + pinRadius);
+    tx = Math.min(east, cx + pinRadius);
   }
   return { box: labelBox(tx, cy - pinRadius - 0.35 - m.drop, m), anchor };
 }
@@ -693,6 +778,115 @@ function renderPins(
 }
 
 /**
+ * Where a viewport lands on this grid, in viewBox units, clipped to the frame —
+ * or null when the two do not overlap at all.
+ *
+ * The geometry behind `RenderOptions.viewport`, exported because the React
+ * wrapper draws its own elements rather than this module's strings, and because
+ * a consumer styling the window themselves needs the same four numbers.
+ */
+export function viewportRect(
+  grid: Grid,
+  bbox: Bbox,
+): { x: number; y: number; width: number; height: number } | null {
+  const nw = project(grid, { lng: bbox.lo, lat: bbox.ha });
+  const se = project(grid, { lng: bbox.hi, lat: bbox.la });
+  const frame = grid.viewBox;
+  const x0 = Math.max(frame.x, Math.min(nw.x, frame.x + frame.cols));
+  const x1 = Math.max(frame.x, Math.min(se.x, frame.x + frame.cols));
+  const y0 = Math.max(frame.y, Math.min(nw.y, frame.y + frame.rows));
+  const y1 = Math.max(frame.y, Math.min(se.y, frame.y + frame.rows));
+  // A viewport entirely outside the overview clips to zero width or height.
+  // That would still emit a rectangle, which some renderers stroke as a line,
+  // so it is reported as no overlap instead.
+  if (!(x1 > x0) || !(y1 > y0)) return null;
+  return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+}
+
+/**
+ * The window rectangle an overview map draws for a detail view.
+ *
+ * Between the dots and the routes: it is a frame around the field, so it has
+ * to sit over the dots — but a minimap carrying its own pins should still show
+ * them on top, not behind the glass.
+ */
+function renderViewport(grid: Grid, theme: Theme, bbox: Bbox): string {
+  const box = viewportRect(grid, bbox);
+  if (!box) return "";
+  return (
+    `<rect class="naksha-viewport" x="${fmt(box.x)}" y="${fmt(box.y)}"` +
+    ` width="${fmt(box.width)}" height="${fmt(box.height)}"` +
+    (theme.viewportOpacity > 0
+      ? ` fill="${esc(theme.viewport)}" fill-opacity="${fmt(theme.viewportOpacity)}"`
+      : ` fill="none"`) +
+    ` stroke="${esc(theme.viewport)}" stroke-width="${fmt(theme.viewportWidth)}"` +
+    ` pointer-events="none"/>`
+  );
+}
+
+/**
+ * The inset layer, as a self-contained `<g>`.
+ *
+ * Exported because the React wrapper builds its own elements and cannot reuse
+ * this module's strings wholesale — it injects this one group, exactly as it
+ * does the dot field.
+ *
+ * Everything inside is expressed in the *inset's* own grid units and the
+ * enclosing transform does the shrinking, so the panel, the dots and the window
+ * are all described at their natural scale and only one number moves.
+ *
+ * `renderSvg` passes the map's own `regionColor` down as the default, which it
+ * can do because it has both. Called directly there is no parent to inherit
+ * from, so pass it here or the miniature comes out monochrome.
+ */
+export function renderInset(grid: Grid, theme: Theme, options: InsetOptions = {}): string {
+  const bbox = options.bbox ?? grid.raster.bbox;
+  const inner = buildGrid(grid.raster, { bbox, height: options.height ?? 12 });
+  const size = options.size ?? 0.22;
+  const margin = options.margin ?? 1;
+  const corner = options.corner ?? "top-right";
+
+  const frame = grid.viewBox;
+  const width = frame.cols * size;
+  const scale = width / inner.cols;
+  const height = inner.rows * scale;
+  // Padding is in the inner grid's units, so it stays proportional to the dots
+  // it surrounds rather than to the map the inset happens to be sitting on.
+  const pad = 0.6;
+  const x =
+    frame.x +
+    (corner.endsWith("right") ? frame.cols - margin - width - pad * scale : margin + pad * scale);
+  const y =
+    frame.y +
+    (corner.startsWith("bottom") ? frame.rows - margin - height - pad * scale : margin + pad * scale);
+
+  // See `InsetOptions.theme` for why the fade goes.
+  const insetTheme: Theme = { ...theme, edgeFade: 0, ...options.theme };
+  const background = options.background ?? insetTheme.background;
+  const panel =
+    background && background !== "transparent"
+      ? `<rect x="${fmt(-pad)}" y="${fmt(-pad)}" width="${fmt(inner.cols + pad * 2)}"` +
+        ` height="${fmt(inner.rows + pad * 2)}" fill="${esc(background)}"` +
+        ` stroke="${esc(insetTheme.dot)}" stroke-width="0.15" rx="${fmt(pad)}"/>`
+      : "";
+
+  // A window around the entire country marks nothing and tints the map it is
+  // drawing, so it waits until this map is looking at less than the whole box.
+  const zoomed =
+    grid.bbox.hi - grid.bbox.lo < bbox.hi - bbox.lo - 1e-9 ||
+    grid.bbox.ha - grid.bbox.la < bbox.ha - bbox.la - 1e-9;
+
+  return (
+    `<g class="naksha-inset" transform="translate(${fmt(x)} ${fmt(y)}) scale(${fmt(scale)})"` +
+    ` pointer-events="none">` +
+    panel +
+    renderDots(inner, insetTheme, { regionColor: options.regionColor }) +
+    (zoomed ? renderViewport(inner, insetTheme, grid.bbox) : "") +
+    `</g>`
+  );
+}
+
+/**
  * The dash properties live *inside* the keyframes, never in the base rule.
  *
  * A route styled `stroke-dashoffset:1` at rest is invisible wherever CSS
@@ -721,7 +915,10 @@ export function renderSvg(grid: Grid, options: RenderOptions = {}): string {
 
   const attrs = [
     `xmlns="http://www.w3.org/2000/svg"`,
-    `viewBox="0 0 ${grid.cols} ${grid.rows}"`,
+    // The window, not the sampled field: an aligned grid runs up to a dot past
+    // each edge so the viewport can sit between dots, and those extra dots are
+    // meant to be clipped rather than shown.
+    `viewBox="${fmt(grid.viewBox.x)} ${fmt(grid.viewBox.y)} ${fmt(grid.viewBox.cols)} ${fmt(grid.viewBox.rows)}"`,
     options.width !== undefined ? `width="${esc(String(options.width))}"` : "",
     options.height !== undefined ? `height="${esc(String(options.height))}"` : "",
     `role="img"`,
@@ -733,7 +930,9 @@ export function renderSvg(grid: Grid, options: RenderOptions = {}): string {
 
   const background =
     theme.background && theme.background !== "transparent"
-      ? `<rect width="${grid.cols}" height="${grid.rows}" fill="${esc(theme.background)}"/>`
+      ? `<rect x="${fmt(grid.viewBox.x)}" y="${fmt(grid.viewBox.y)}"` +
+        ` width="${fmt(grid.viewBox.cols)}" height="${fmt(grid.viewBox.rows)}"` +
+        ` fill="${esc(theme.background)}"/>`
       : "";
 
   return (
@@ -742,8 +941,19 @@ export function renderSvg(grid: Grid, options: RenderOptions = {}): string {
     (options.animate ? `<style>${ANIMATION_CSS}</style>` : "") +
     background +
     renderDots(grid, theme, options) +
+    (options.viewport ? renderViewport(grid, theme, options.viewport) : "") +
     renderRoutes(grid, theme, options, prefix) +
     renderPins(grid, theme, options, clusters) +
+    // Last, because an inset is an overlay: it has to sit over the field, the
+    // routes and the pins it is summarising.
+    (options.inset
+      ? renderInset(grid, theme, {
+          // The map's own colouring is the default, so the miniature is
+          // recognisably the same map; an explicit one in `inset` wins.
+          regionColor: options.regionColor,
+          ...(options.inset === true ? {} : options.inset),
+        })
+      : "") +
     `</svg>`
   );
 }

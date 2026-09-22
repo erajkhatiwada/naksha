@@ -7,14 +7,19 @@
  */
 
 export type { LngLat, Bbox } from "./geo.ts";
+export type { ZoomOptions, PanOptions } from "./geo.ts";
 export {
   NEPAL_BBOX,
+  MIN_ZOOM_SPAN,
   aspectWidth,
   distanceKm,
   bboxSizeKm,
   bboxContains,
   padBbox,
   fitAspect,
+  clampBbox,
+  zoomBbox,
+  panBbox,
 } from "./geo.ts";
 
 export type { RasterSource, Region } from "./raster.ts";
@@ -28,6 +33,7 @@ export {
   dotIndex,
   isInsideGrid,
   project,
+  unproject,
   dotCenter,
   snapPoint,
   regionAnchor,
@@ -53,11 +59,11 @@ export { arcHeight, arcPath, routePath } from "./route.ts";
 export type { MapPoint, Cluster, ClusterResult } from "./cluster.ts";
 export { clusterPoints, collapseRatio } from "./cluster.ts";
 
-export type { RenderOptions, LabelPlacement } from "./svg.ts";
-export { renderSvg } from "./svg.ts";
+export type { RenderOptions, LabelPlacement, InsetOptions } from "./svg.ts";
+export { renderSvg, viewportRect, renderInset } from "./svg.ts";
 
 export type { InteractionOptions, HighlightOptions, HitKind } from "./interact.ts";
-export { attachInteractions, hitTest } from "./interact.ts";
+export { attachInteractions, hitTest, eventPoint } from "./interact.ts";
 
 export { VIEWS, type ViewName } from "./views.ts";
 
@@ -68,7 +74,7 @@ import { RegionRaster, type Region } from "./raster.ts";
 import { DISTRICT_RASTER, DISTRICTS } from "./generated/districts.ts";
 import { buildGrid, type Grid, type GridOptions } from "./grid.ts";
 import { renderSvg, type RenderOptions } from "./svg.ts";
-import type { LngLat } from "./geo.ts";
+import type { Bbox, LngLat } from "./geo.ts";
 import type { Bilingual, Lang } from "./i18n.ts";
 import { pickLabel, regionName, regionProvince, regionHq } from "./i18n.ts";
 
@@ -117,6 +123,21 @@ export function findDistrict(name: string): Region | undefined {
 /** Which district contains a point, or undefined if it is outside Nepal. */
 export function districtAt(p: LngLat): Region | undefined {
   return byId.get(nepalRaster().sample(p));
+}
+
+/**
+ * Geographic bounds of a district — the box to zoom to when one is picked.
+ *
+ * ```ts
+ * const dot = hitTest(grid, x, y);
+ * const box = fitAspect(padBbox(districtBbox(dot.region)!, 0.08), 16 / 9);
+ * ```
+ *
+ * Undefined only for an id no district carries. All 77 are built and memoised
+ * on the first call — see `RegionRaster.regionBbox` for why it is one pass.
+ */
+export function districtBbox(id: number): Bbox | undefined {
+  return nepalRaster().regionBbox(id);
 }
 
 /** One of Nepal's seven provinces, with the districts that make it up. */

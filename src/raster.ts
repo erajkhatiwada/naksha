@@ -55,6 +55,7 @@ export class RegionRaster {
 
   #source: string;
   #pixels: Uint8Array | null = null;
+  #bounds: Map<number, Bbox> | null = null;
 
   constructor(source: RasterSource) {
     this.width = source.width;
@@ -105,6 +106,68 @@ export class RegionRaster {
   /** True when a point falls inside Nepal. */
   contains(p: LngLat): boolean {
     return this.sample(p) !== OUTSIDE;
+  }
+
+  /**
+   * Geographic bounds of one region, or undefined for an id the raster never
+   * uses.
+   *
+   * The box to zoom a viewport to when a district is picked. It is the
+   * region's extent in the *bitmap*, so it is exact to one raster cell
+   * (0.447 km) — finer than any grid this library draws, and finer than the
+   * dot a click on that district actually landed on.
+   *
+   * The whole table is built on the first call and memoised: one pass over the
+   * bitmap answers for all 77 districts, where asking per district would cost a
+   * pass each. Pair it with `padBbox` for breathing room and `fitAspect` to
+   * match the container:
+   *
+   * ```ts
+   * const box = fitAspect(padBbox(raster.regionBbox(id)!, 0.08), 16 / 9);
+   * ```
+   */
+  regionBbox(id: number): Bbox | undefined {
+    if (this.#bounds === null) {
+      const cells = new Map<number, { x0: number; x1: number; y0: number; y1: number }>();
+      const px = this.pixels;
+      for (let y = 0; y < this.height; y++) {
+        const row = y * this.width;
+        for (let x = 0; x < this.width; x++) {
+          const v = px[row + x];
+          if (v === OUTSIDE) continue;
+          const b = cells.get(v);
+          if (b === undefined) {
+            cells.set(v, { x0: x, x1: x, y0: y, y1: y });
+            continue;
+          }
+          // `else if` is safe rather than clever: x0 <= x1 always, so a cell
+          // west of the minimum cannot also be east of the maximum.
+          if (x < b.x0) b.x0 = x;
+          else if (x > b.x1) b.x1 = x;
+          // Rows are scanned north to south, so y0 is settled at first sight
+          // and y1 only ever grows.
+          b.y1 = y;
+        }
+      }
+      const { lo, hi, la, ha } = this.bbox;
+      const lngPerCell = (hi - lo) / this.width;
+      const latPerCell = (ha - la) / this.height;
+      // Outer edges of the extreme cells, not their centres — a box drawn
+      // through the centres would exclude half a cell of the district on
+      // every side.
+      this.#bounds = new Map(
+        [...cells].map(([v, b]) => [
+          v,
+          {
+            lo: lo + b.x0 * lngPerCell,
+            hi: lo + (b.x1 + 1) * lngPerCell,
+            la: ha - (b.y1 + 1) * latPerCell,
+            ha: ha - b.y0 * latPerCell,
+          },
+        ]),
+      );
+    }
+    return this.#bounds.get(id);
   }
 
   /** Ground resolution of one raster cell, in km, at Nepal's mid-latitude. */

@@ -13,6 +13,16 @@ import {
   describePlace,
   distanceKm,
   hitTest,
+  eventPoint,
+  unproject,
+  zoomBbox,
+  panBbox,
+  clampBbox,
+  districtBbox,
+  padBbox,
+  bboxContains,
+  NEPAL_BBOX,
+  MIN_ZOOM_SPAN,
   darkTheme,
   lightTheme,
   DISTRICTS,
@@ -30,6 +40,7 @@ import {
   type Grid,
   type LabelPlacement,
   type LngLat,
+  type Bbox,
   type ViewName,
 } from "../src/index.ts";
 
@@ -265,6 +276,41 @@ function initialView(): ViewName {
   return requested && requested in VIEWS ? (requested as ViewName) : "nepal";
 }
 
+/**
+ * `?overview=always|zoomed|off` controls the overview map.
+ *
+ * Three options because there are three defensible answers and the choice is
+ * the consumer's, not the library's: an overview is a second render, so showing
+ * it is a decision about the surrounding page rather than about the map.
+ * `always` is the default here — it is the one that shows what the feature is.
+ */
+type Overview = "always" | "zoomed" | "off";
+
+const OVERVIEWS: Overview[] = ["always", "zoomed", "off"];
+
+function initialOverview(): Overview {
+  const requested = new URLSearchParams(location.search).get("overview");
+  return OVERVIEWS.includes(requested as Overview) ? (requested as Overview) : "always";
+}
+
+/**
+ * `?corner=top-right|top-left|bottom-right|bottom-left` moves the overview.
+ *
+ * A demo control rather than a library option, and deliberately so: the
+ * overview here is its own element, so where it sits is a CSS class and nothing
+ * the renderer knows about. The library's own `inset` option is the other
+ * answer — it puts a miniature inside the SVG itself, which is what you want
+ * when there is no DOM to position.
+ */
+type Corner = "top-right" | "top-left" | "bottom-right" | "bottom-left";
+
+const CORNERS: Corner[] = ["top-right", "top-left", "bottom-right", "bottom-left"];
+
+function initialCorner(): Corner {
+  const requested = new URLSearchParams(location.search).get("corner");
+  return CORNERS.includes(requested as Corner) ? (requested as Corner) : "top-right";
+}
+
 /** Highlight granularity — the library's `HighlightOptions.mode`. */
 type Highlight = "dot" | "region";
 
@@ -339,9 +385,30 @@ const state = {
    */
   context: initialContext(),
   lang: initialLang(),
-  /** Which bounding box the grid samples. See `initialView`. */
-  view: initialView(),
+  /**
+   * The bounding box the grid samples — the whole of zoom, since a viewport
+   * here is a box and never a scale factor (spec §6).
+   *
+   * Free-form rather than a `ViewName`: the named views are starting points on
+   * a ladder the zoom buttons then step off. `syncView` puts the select back in
+   * step, or marks it Custom when the box no longer matches any of them.
+   */
+  bbox: VIEWS[initialView()] as Bbox,
+  /**
+   * The box whose dot lattice the field is sampled on.
+   *
+   * Re-pinned by every zoom, named view and reset — anything that rebuilds the
+   * map — and deliberately *not* by a drag. Holding it still through a drag is
+   * what lets the viewport slide between dots: the dots keep their ground
+   * positions, the silhouette translates rather than re-forming, and the map
+   * glides instead of stepping a whole dot at a time.
+   */
+  lattice: VIEWS[initialView()] as Bbox,
   find: initialFind() as Entry | null,
+  /** Whether the overview map is drawn. See `initialOverview`. */
+  overview: initialOverview(),
+  /** Which corner of the stage it sits in. See `initialCorner`. */
+  corner: initialCorner(),
   interact: initialInteract(),
   /**
    * Whether a hit lights one dot or the whole district around it.
@@ -362,6 +429,8 @@ const $ = <T extends Element>(sel: string) => document.querySelector<T>(sel)!;
 const stage = $<HTMLElement>("#stage");
 const readout = $<HTMLElement>("#readout");
 const hint = $<HTMLElement>("#hint");
+const minimap = $<HTMLElement>("#minimap");
+const minimapMap = $<HTMLElement>("#minimap-map");
 
 // Dark is the base theme, so anything that is not an explicit "light" is dark —
 // including the attribute being absent, which is what a visitor sees if the
@@ -402,6 +471,22 @@ function mapTheme(background: string): Partial<Theme> {
   };
 }
 
+/**
+ * The dots the viewBox actually shows.
+ *
+ * A dot owns the cell `[col, col+1]` and is drawn at its centre, so it is on
+ * screen when that centre falls inside the window. Everything else in the
+ * field is the one-dot margin `align` samples so the viewport can slide
+ * between dots, and the viewBox clips it.
+ */
+function visibleDots(grid: Grid): Dot[] {
+  const { x, y, cols, rows } = grid.viewBox;
+  return grid.dots.filter(
+    (d) =>
+      d.col + 0.5 >= x && d.col + 0.5 <= x + cols && d.row + 0.5 >= y && d.row + 0.5 <= y + rows,
+  );
+}
+
 /** Which views ask the renderer for labels — see `render`. */
 const drawsLabels = () => state.mode === "routes" || state.mode === "find";
 
@@ -422,7 +507,7 @@ const HIGHLIGHT_RADIUS = 0.44;
 
 function render() {
   const t0 = performance.now();
-  const grid = buildGrid(raster, { bbox: VIEWS[state.view] });
+  const grid = buildGrid(raster, { bbox: state.bbox, align: state.lattice });
   const gridMs = performance.now() - t0;
 
   let routes: Route[] = [];
@@ -514,18 +599,29 @@ function render() {
   const nodes = stage.querySelectorAll("*").length;
   const fmt = (n: number) => n.toLocaleString();
 
+  // An aligned field runs a dot past each edge so the viewport can sit between
+  // dots, and those dots are clipped by the viewBox. Counting them would put a
+  // district in the "in view" tally that is not on screen, and inflate the dot
+  // count by the margin — so the readout counts the window, not the field.
+  const seen = visibleDots(grid);
+  const dotCount = seen.length;
+  const regionCount = new Set(seen.map((d) => d.region)).size;
+
   let rows: [string, string][];
   if (state.mode === "routes") {
     rows = [
       ["Routes", `${routes.length}`],
       ["Destinations", `${HUBS.length}`],
-      ["Dots", fmt(grid.dots.length)],
+      ["Dots", fmt(dotCount)],
       ["DOM nodes", fmt(nodes)],
       ["Grid build", `${gridMs.toFixed(1)} ms`],
       ["SVG build", `${renderMs.toFixed(1)} ms`],
     ];
   } else if (state.mode === "network") {
-    const busiest = Math.max(...clusters.map((c) => c.points.length));
+    // Folded from 0 rather than `Math.max(...[])`, which is -Infinity: zoom
+    // into a corner of Karnali and the readout shipped "Largest cluster
+    // -Infinity" the moment the last location left the viewport.
+    const busiest = clusters.reduce((n, c) => Math.max(n, c.points.length), 0);
     rows = [
       ["Locations", `${LOCATIONS.length}`],
       ["Dots used", `${clusters.length}`],
@@ -536,9 +632,9 @@ function render() {
     ];
   } else if (state.mode === "districts") {
     rows = [
-      ["Districts", `${grid.regions.size}`],
+      ["Districts", `${regionCount}`],
       ["Provinces", "7"],
-      ["Dots", fmt(grid.dots.length)],
+      ["Dots", fmt(dotCount)],
       ["DOM nodes", fmt(nodes)],
       ["Grid build", `${gridMs.toFixed(1)} ms`],
       ["SVG build", `${renderMs.toFixed(1)} ms`],
@@ -559,7 +655,7 @@ function render() {
           ["Districts", `${DISTRICTS.length}`],
           ["Places", `${CITY_COUNT}`],
           ["Scripts", "2"],
-          ["Dots", fmt(grid.dots.length)],
+          ["Dots", fmt(dotCount)],
           ["Grid build", `${gridMs.toFixed(1)} ms`],
           ["SVG build", `${renderMs.toFixed(1)} ms`],
         ];
@@ -569,14 +665,15 @@ function render() {
   // changing the box can be read off one place: the ground resolution moves by
   // 40x across the ladder while the dot count above barely moves at all.
   rows.push(["km/dot", grid.kmPerDot.toFixed(2)]);
-  rows.push(["Districts in view", `${grid.regions.size}`]);
+  rows.push(["Districts in view", `${regionCount}`]);
   if (points.length) {
     rows.push(["Off-screen", `${offscreen.length} of ${points.length}`]);
   }
 
   readout.innerHTML = rows.map(([k, v]) => `<div><k>${k}</k><v>${v}</v></div>`).join("");
-  lastClusterCount = clusters.length;
-  hint.innerHTML = state.selected ? describeSelection() : defaultHint(clusters.length);
+  lastCounts = { shown: points.length - offscreen.length, dots: clusters.length };
+  hint.innerHTML = state.selected ? describeSelection() : defaultHint();
+  renderMinimap(theme);
   attach(grid, points, routes);
 }
 
@@ -599,19 +696,37 @@ function verb(): string {
   // On a touch device "hover" and "arrow keys" are advice that cannot be
   // followed, so the short form is both accurate and a line shorter.
   if (matchMedia("(hover: none)").matches) {
-    return ` <span class="alt-script">Tap a dot, pin or route.</span>`;
+    return ` <span class="alt-script">Tap a dot, pin or route. Double-tap a district to zoom to it.</span>`;
   }
   const how = state.interact === "hover" ? "Hover" : "Click";
-  return ` <span class="alt-script">${how} a dot, pin or route — or use the arrow keys.</span>`;
+  return (
+    ` <span class="alt-script">${how} a dot, pin or route — or use the arrow keys. ` +
+    `Double-click a district to zoom to it.</span>`
+  );
 }
 
-function defaultHint(clusterCount: number): string {
+function defaultHint(): string {
   if (state.mode === "network") {
-    const merged = LOCATIONS.length - clusterCount;
+    const { shown, dots } = lastCounts;
+    // Counted against what is drawn, not against the whole set. A point outside
+    // the viewport is on no dot at all, so charging it to the overlap turned
+    // zooming *in* — the thing that separates locations — into a claim that
+    // more of them were colliding: at the tightest view the line read "38
+    // locations occupy 0 dots — 38 share one with a neighbour", and the
+    // readout beside it said "Largest cluster -Infinity".
+    if (shown === 0) {
+      return (
+        `<b>None of the ${LOCATIONS.length} locations</b> are in this viewport — ` +
+        `zoom out to bring them back.` + verb()
+      );
+    }
+    const where =
+      shown < LOCATIONS.length
+        ? `<b>${shown} of ${LOCATIONS.length} locations</b> are in view on`
+        : `<b>${LOCATIONS.length} locations</b> across all seven provinces occupy`;
     return (
-      `<b>${LOCATIONS.length} locations</b> across all seven provinces occupy ` +
-      `<b>${clusterCount} dots</b> — ${merged} share one with a neighbour, and the badge ` +
-      `reports it rather than hiding the overlap.` + verb()
+      `${where} <b>${dots} dots</b> — ${shown - dots} share one with a neighbour, and ` +
+      `the badge reports it rather than hiding the overlap.` + verb()
     );
   }
   if (state.mode === "districts") {
@@ -648,8 +763,13 @@ function defaultHint(clusterCount: number): string {
 
 // --------------------------------------------------------- interaction ---
 
-/** Kept so a hover that ends can restore the view's own default line. */
-let lastClusterCount = 0;
+/**
+ * Kept so a hover that ends can restore the view's own default line.
+ *
+ * Both halves, not just the dot count: the network line subtracts one from the
+ * other, and the subtraction is only true of the points actually on the map.
+ */
+let lastCounts = { shown: 0, dots: 0 };
 
 /**
  * A pasteable `points` entry for a dot's centre.
@@ -724,13 +844,13 @@ function describeRoute(route: Route, index: number): string {
 /** The persistent line for whatever a click pinned. */
 function describeSelection(): string {
   const sel = state.selected;
-  if (!sel) return defaultHint(lastClusterCount);
+  if (!sel) return defaultHint();
   if (sel.kind === "cluster") return describeCluster(sel.cluster);
   if (sel.kind === "route") {
     const route = currentRoutes[sel.index];
-    return route ? describeRoute(route, sel.index) : defaultHint(lastClusterCount);
+    return route ? describeRoute(route, sel.index) : defaultHint();
   }
-  if (!districtById(sel.id)) return defaultHint(lastClusterCount);
+  if (!districtById(sel.id)) return defaultHint();
   // The dot that was actually clicked, not the district's first — the line
   // quotes a coordinate, and quoting a different one would be a small lie.
   return (
@@ -783,7 +903,7 @@ function attach(grid: Grid, points: MapPoint[], routes: Route[]) {
   if (!svg || state.interact === "off") return;
 
   const restore = () => {
-    hint.innerHTML = state.selected ? describeSelection() : defaultHint(lastClusterCount);
+    hint.innerHTML = state.selected ? describeSelection() : defaultHint();
   };
 
   if (state.interact === "hover") {
@@ -1057,13 +1177,322 @@ placeSelect.addEventListener("change", () => {
 
 const viewSelect = $<HTMLSelectElement>("#view");
 
-viewSelect.addEventListener("change", () => {
-  state.view = viewSelect.value as ViewName;
+/**
+ * How far one press of +/- moves.
+ *
+ * 2, so the readout tells the story: the km/dot figure halves on every step
+ * while the dot count beside it barely moves. That is the whole claim of
+ * spec §6 in two numbers, and a gentler step would blur it.
+ */
+const ZOOM_STEP = 2;
+
+/**
+ * Adopt a new viewport.
+ *
+ * Every zoom, recentre and named-view pick lands here, so the select, the
+ * overview and the dropped selection are handled once rather than at each
+ * call site.
+ */
+function setBbox(next: Bbox) {
+  state.bbox = next;
+  // Re-pinned: this is a zoom, a named view or a reset, all of which rebuild
+  // the field anyway. A drag calls `slideBbox` and leaves the lattice alone.
+  state.lattice = next;
   // A dot pinned in one viewport is a different dot in the next — the grid is
   // resampled, so the cell under that coordinate is not the same cell.
   state.selected = null;
+  syncView();
+  render();
+}
+
+/**
+ * Move the viewport without disturbing the lattice — what a drag calls.
+ *
+ * The distinction is the whole of why the map glides: `setBbox` re-pins the
+ * lattice to the new box, which is right when the field is being rebuilt and
+ * wrong when it is only being slid.
+ */
+function slideBbox(next: Bbox) {
+  state.bbox = next;
+  state.selected = null;
+  syncView();
+  render();
+}
+
+/**
+ * Point the select at the named view the box matches, or at Custom.
+ *
+ * Compared by value rather than by keeping the name around: zooming leaves the
+ * ladder, but zooming back can land on a named box exactly, and the control
+ * should say so when it does.
+ */
+function syncView() {
+  const match = (Object.keys(VIEWS) as ViewName[]).find((name) => {
+    const v = VIEWS[name];
+    return (
+      Math.abs(v.lo - state.bbox.lo) < 1e-9 &&
+      Math.abs(v.hi - state.bbox.hi) < 1e-9 &&
+      Math.abs(v.la - state.bbox.la) < 1e-9 &&
+      Math.abs(v.ha - state.bbox.ha) < 1e-9
+    );
+  });
+  viewSelect.value = match ?? "custom";
+}
+
+viewSelect.addEventListener("change", () => {
+  const name = viewSelect.value as ViewName;
+  if (name in VIEWS) setBbox(VIEWS[name]);
+});
+
+/**
+ * Wire a -/+/reset group. Called for both: the one in the controls strip and
+ * the one on the overview, so zoom is reachable whether the eye is on the
+ * settings or on the map.
+ */
+function wireZoom(group: HTMLElement) {
+  group.querySelectorAll("button").forEach((b) =>
+    b.addEventListener("click", () => {
+      const how = b.getAttribute("data-zoom");
+      if (how === "reset") setBbox(NEPAL_BBOX);
+      else setBbox(zoomBbox(state.bbox, how === "in" ? ZOOM_STEP : 1 / ZOOM_STEP));
+    }),
+  );
+}
+
+wireZoom($("#zoom"));
+wireZoom($("#minimap-zoom"));
+
+const overviewGroup = $<HTMLElement>("#overview");
+
+function syncOverview() {
+  overviewGroup
+    .querySelectorAll("button")
+    .forEach((b) => b.classList.toggle("on", b.getAttribute("data-overview") === state.overview));
+}
+
+overviewGroup.addEventListener("click", (e) => {
+  const value = (e.target as Element).closest("button")?.getAttribute("data-overview");
+  if (!value) return;
+  state.overview = value as Overview;
+  syncOverview();
   render();
 });
+
+/**
+ * Control groups: open on a wide screen, closed on a narrow one.
+ *
+ * Not something CSS can do, because `open` is an attribute rather than a style.
+ * Measured before grouping, the flat strip of fourteen controls ran 816px tall
+ * at 390px wide and 1133px at 360px — taller than the screen it was sitting on,
+ * which put the map some 2,900px down the page. Collapsed, the four headings
+ * cost 221px at any width and the map is the next thing you see. The breakpoint
+ * matches the one in the stylesheet; above it the groups lay out side by side
+ * and are cheaper open than closed.
+ */
+const compact = matchMedia("(max-width: 1000px)");
+const controlGroups = document.querySelectorAll<HTMLDetailsElement>(".control-group");
+
+function syncGroups() {
+  for (const group of controlGroups) group.open = !compact.matches;
+}
+
+// Only on a breakpoint crossing, so rotating a phone re-settles the panel but
+// opening a group by hand is never undone underneath the reader.
+compact.addEventListener("change", syncGroups);
+
+const cornerSelect = $<HTMLSelectElement>("#corner");
+
+/** Placement is a class swap — no re-render, nothing for the library to do. */
+function syncCorner() {
+  for (const corner of CORNERS) minimap.classList.toggle(`at-${corner}`, corner === state.corner);
+  cornerSelect.value = state.corner;
+}
+
+cornerSelect.addEventListener("change", () => {
+  state.corner = cornerSelect.value as Corner;
+  syncCorner();
+});
+
+/**
+ * Open a district's own bounds out to the zoom floor if it is smaller.
+ *
+ * Two of the 77 need it: padded for breathing room, Bhaktapur's box spans
+ * 0.209° and Lalitpur's 0.255°, against a floor of 0.32°. Framing them exactly
+ * would sample finer than the raster and the dots would go blocky, so the box
+ * opens about its centre — the district stays framed, with more of its
+ * neighbours showing than asked for.
+ */
+function atLeastFloor(box: Bbox): Bbox {
+  const width = box.hi - box.lo;
+  if (width >= MIN_ZOOM_SPAN) return box;
+  // padBbox grows by a fraction of the span on each side, so half the shortfall.
+  return padBbox(box, (MIN_ZOOM_SPAN / width - 1) / 2);
+}
+
+/**
+ * Double-click to zoom to the district under the pointer.
+ *
+ * Double rather than single because the demo already spends single clicks on
+ * selection, and `attachInteractions` has no double-click hook to borrow — so
+ * it is wired straight onto the element with the exported primitives that make
+ * it short: `eventPoint` for the screen-to-viewBox transform, `hitTest` for
+ * which district was hit, `districtBbox` for where that district is.
+ *
+ * Falling back to a step zoom keeps the gesture from being a dead end: off the
+ * field there is no district to frame, and on one already filling the view
+ * re-framing it would look like nothing happened.
+ *
+ * **Counted off `click`, not listened for as `dblclick`.** In click mode every
+ * click re-renders — `onRegionClick` and `clearOnMiss` both call `render`,
+ * which replaces the SVG through `stage.innerHTML`. The two clicks then have
+ * different target nodes, and the browser dispatches no `dblclick` at all, so
+ * the gesture was dead in exactly the one mode whose hint promises it. The
+ * click count survives that swap because it belongs to the pointer sequence
+ * rather than to the target: measured, the second click still arrives with
+ * `detail === 2` after the whole subtree has been rebuilt under it.
+ */
+stage.addEventListener("click", (e) => {
+  if (e.detail < 2) return;
+  const svg = stage.querySelector("svg");
+  if (!svg || !currentGrid) return;
+  const at = eventPoint(svg, e);
+  if (!at) return;
+  const dot = hitTest(currentGrid, at.x, at.y);
+  const box = dot ? districtBbox(dot.region) : undefined;
+  if (box && box.hi - box.lo < (state.bbox.hi - state.bbox.lo) * 0.9) {
+    setBbox(clampBbox(atLeastFloor(padBbox(box, 0.12))));
+    return;
+  }
+  // The cursor is held still, so the thing being pointed at stays under the
+  // pointer instead of sliding off as the box shrinks.
+  setBbox(zoomBbox(state.bbox, ZOOM_STEP, { center: unproject(currentGrid, at.x, at.y) }));
+});
+
+/**
+ * The overview map: the whole country at a fraction of the dot budget, with
+ * the current viewport drawn on it.
+ *
+ * It is the same library call the main map makes — `buildGrid` then
+ * `renderSvg` — just over `NEPAL_BBOX` at height 14 instead of 40. Nothing
+ * links the two maps; `viewport` only draws a rectangle where it is told.
+ */
+let minimapGrid: Grid | null = null;
+
+function renderMinimap(theme: Partial<Theme>) {
+  const zoomed = state.bbox.hi - state.bbox.lo < NEPAL_BBOX.hi - NEPAL_BBOX.lo - 1e-9;
+  const show = state.overview === "always" || (state.overview === "zoomed" && zoomed);
+  minimap.hidden = !show;
+  if (!show) {
+    // Emptied rather than just hidden: a `hidden` container still holds real
+    // nodes, and leaving a stale window rect in the document means anything
+    // querying the page — a test, a screen reader, the next developer — finds
+    // a viewport that isn't on screen.
+    minimapMap.innerHTML = "";
+    return;
+  }
+  // Built once and kept: it is the same box at the same height for the life of
+  // the page, and only the rectangle drawn on it ever moves.
+  minimapGrid ??= buildGrid(raster, { bbox: NEPAL_BBOX, height: 14 });
+  minimapMap.innerHTML = renderSvg(minimapGrid, {
+    theme: { ...theme, background: "transparent", viewport: state.accent },
+    // Omitted at full extent: a window drawn around the entire frame answers a
+    // question nobody asked, and its tint washes the country it is drawing. The
+    // overview still earns its place there — it is what you drag to move — so
+    // the map stays and only the rectangle waits for a reason to exist.
+    viewport: zoomed ? state.bbox : undefined,
+    title: zoomed
+      ? "Overview of Nepal showing the current viewport"
+      : "Overview of Nepal — the whole country is in view",
+  });
+}
+
+/**
+ * The viewport centred on a coordinate, keeping its current size.
+ *
+ * `panBbox` rather than the obvious `clampBbox` on a hand-rolled box, which is
+ * what this used to be: carrying the *degree* span to the new centre is not
+ * carrying the viewport. Longitude degrees narrow by cos(lat), so the box lost
+ * ground width as it travelled north, `aspectWidth` answered with fewer
+ * columns, and the map changed shape in the middle of a drag — measured here,
+ * 71 columns down to 69 and the drawn map growing 436px to 449px tall while the
+ * pointer was still down. `panBbox` carries the ground size, which pins the
+ * column count by construction.
+ */
+function viewportOn(to: LngLat): Bbox {
+  return panBbox(state.bbox, to, { align: state.lattice });
+}
+
+/** Where on the overview a pointer event landed, or null if it missed. */
+function overviewPoint(e: PointerEvent): LngLat | null {
+  // Re-queried every time rather than captured once: `renderMinimap` replaces
+  // the SVG on each frame, and `getScreenCTM` on the detached old node returns
+  // null — which is exactly what would make a drag die after one move.
+  const svg = minimapMap.querySelector("svg");
+  if (!svg || !minimapGrid) return null;
+  const at = eventPoint(svg, e);
+  return at ? unproject(minimapGrid, at.x, at.y) : null;
+}
+
+/**
+ * Drag the viewport around the overview.
+ *
+ * Listeners sit on `#minimap-map`, which survives every render, rather than on
+ * the SVG inside it, which does not. Pointer capture then keeps the drag alive
+ * past the edge of the overview and outside the window.
+ */
+let dragging = false;
+/** Pointer-to-centre offset, so grabbing the window doesn't teleport it. */
+let grab = { lng: 0, lat: 0 };
+let frame = 0;
+let pendingTo: LngLat | null = null;
+
+minimapMap.addEventListener("pointerdown", (e) => {
+  const to = overviewPoint(e);
+  if (!to) return;
+  // Grabbing inside the window moves it from where it was held; grabbing
+  // outside is a jump, and the box centres on the point at once.
+  const inside = bboxContains(state.bbox, to);
+  grab = inside
+    ? {
+        lng: (state.bbox.lo + state.bbox.hi) / 2 - to.lng,
+        lat: (state.bbox.la + state.bbox.ha) / 2 - to.lat,
+      }
+    : { lng: 0, lat: 0 };
+  dragging = true;
+  minimapMap.classList.add("is-dragging");
+  minimapMap.setPointerCapture(e.pointerId);
+  if (!inside) slideBbox(viewportOn(to));
+});
+
+minimapMap.addEventListener("pointermove", (e) => {
+  if (!dragging) return;
+  const to = overviewPoint(e);
+  if (!to) return;
+  pendingTo = { lng: to.lng + grab.lng, lat: to.lat + grab.lat };
+  // Coalesced to one render per frame. A pointer fires well above 60 Hz, and
+  // every move here rebuilds the grid, the SVG and the interaction layer —
+  // 2.5 ms median, measured in the page. A 60-move burst collapses to a single
+  // render this way; unthrottled it would be 60, or 150 ms of work inside one
+  // 16.7 ms frame.
+  frame ||= requestAnimationFrame(() => {
+    frame = 0;
+    if (pendingTo) slideBbox(viewportOn(pendingTo));
+  });
+});
+
+const endDrag = (e: PointerEvent) => {
+  if (!dragging) return;
+  dragging = false;
+  // Flushed rather than dropped: releasing inside the frame the last move
+  // scheduled would otherwise discard it, leaving the viewport up to one
+  // frame of travel behind where the pointer actually let go.
+  if (pendingTo) slideBbox(viewportOn(pendingTo));
+  pendingTo = null;
+  minimapMap.classList.remove("is-dragging");
+  if (minimapMap.hasPointerCapture(e.pointerId)) minimapMap.releasePointerCapture(e.pointerId);
+};
+minimapMap.addEventListener("pointerup", endDrag);
+minimapMap.addEventListener("pointercancel", endDrag);
 
 // -------------------------------------------- highlight granularity ---
 
@@ -1407,7 +1836,10 @@ $("#lang")
   .querySelectorAll("button")
   .forEach((b) => b.classList.toggle("on", b.getAttribute("data-lang") === state.lang));
 if (state.find) input.value = state.lang === "np" ? state.find.nameNp : state.find.name;
-viewSelect.value = state.view;
+syncGroups();
+syncView();
+syncOverview();
+syncCorner();
 syncFinder();
 syncColors();
 syncPlacement();

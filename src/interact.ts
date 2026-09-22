@@ -27,6 +27,40 @@ import { circleSubpath } from "./svg.ts";
 const SVG_NS = "http://www.w3.org/2000/svg";
 
 /**
+ * Where a pointer event landed, in **viewBox coordinates** — the frame
+ * `hitTest`, `project` and every theme size already speak in.
+ *
+ * `getScreenCTM` accounts for the viewBox, `preserveAspectRatio`, CSS
+ * transforms and page scroll all at once. Reimplementing that arithmetic works
+ * right up until the map is scaled or given its own aspect handling, which is
+ * why this is exported rather than left inside `attachInteractions`: wiring a
+ * gesture the built-in callbacks don't cover — a double-click to zoom, a click
+ * on an overview map to recentre — should not mean rederiving it.
+ *
+ * ```ts
+ * mini.addEventListener("click", (e) => {
+ *   const at = eventPoint(mini, e);
+ *   if (at) recenter(unproject(overview, at.x, at.y));
+ * });
+ * ```
+ *
+ * Returns null when the element is not rendered, and so has no transform yet.
+ */
+export function eventPoint(svg: SVGSVGElement, e: MouseEvent): { x: number; y: number } | null {
+  const ctm = svg.getScreenCTM();
+  if (!ctm) return null;
+  if (typeof DOMPoint === "function") {
+    const p = new DOMPoint(e.clientX, e.clientY).matrixTransform(ctm.inverse());
+    return { x: p.x, y: p.y };
+  }
+  const p = svg.createSVGPoint();
+  p.x = e.clientX;
+  p.y = e.clientY;
+  const t = p.matrixTransform(ctm.inverse());
+  return { x: t.x, y: t.y };
+}
+
+/**
  * The dot at a point in **viewBox coordinates**, or undefined for a miss.
  *
  * Pure and DOM-free: `attachInteractions` converts screen coordinates and calls
@@ -222,25 +256,6 @@ export function attachInteractions<T extends MapPoint = MapPoint>(
   // -------------------------------------------------------------- hit test ---
 
   /**
-   * `getScreenCTM` already accounts for the viewBox, `preserveAspectRatio`,
-   * CSS transforms and page scroll. Reimplementing that arithmetic works right
-   * up until a consumer scales the map or sets its own aspect handling.
-   */
-  function toViewBox(e: MouseEvent): { x: number; y: number } | null {
-    const ctm = svg.getScreenCTM();
-    if (!ctm) return null;
-    if (typeof DOMPoint === "function") {
-      const p = new DOMPoint(e.clientX, e.clientY).matrixTransform(ctm.inverse());
-      return { x: p.x, y: p.y };
-    }
-    const p = svg.createSVGPoint();
-    p.x = e.clientX;
-    p.y = e.clientY;
-    const t = p.matrixTransform(ctm.inverse());
-    return { x: t.x, y: t.y };
-  }
-
-  /**
    * Pin, then route, then the dot underneath.
    *
    * A pin or route element wins even when its data can't be resolved — the
@@ -262,7 +277,7 @@ export function attachInteractions<T extends MapPoint = MapPoint>(
       return { kind: "route", key: `route:${index}`, index, route: routes?.[index] };
     }
 
-    const at = toViewBox(e);
+    const at = eventPoint(svg, e);
     if (!at) return null;
     const dot = hitTest(grid, at.x, at.y, tolerance);
     return dot ? { kind: "region", key: `region:${dot.region}`, dot } : null;

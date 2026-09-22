@@ -17,7 +17,9 @@ import { useEffect, useMemo, useRef, type CSSProperties, type ReactNode } from "
 import type { GridOptions, Grid, Dot } from "../grid.ts";
 import { buildGrid } from "../grid.ts";
 import type { RenderOptions } from "../svg.ts";
-import { renderDotField, labelLines } from "../svg.ts";
+import { renderDotField, labelLines, viewportRect, renderInset } from "../svg.ts";
+import type { InsetOptions } from "../svg.ts";
+import type { Bbox } from "../geo.ts";
 import type { HighlightOptions } from "../interact.ts";
 import { attachInteractions } from "../interact.ts";
 import { resolveTheme, type Theme } from "../theme.ts";
@@ -33,6 +35,17 @@ export interface NakshaProps extends GridOptions {
   /** Defaults to Nepal's 77 districts. */
   raster?: RegionRaster;
   theme?: Partial<Theme>;
+  /**
+   * Draw a rectangle showing where another viewport is looking — see
+   * `RenderOptions.viewport`. Pass the detail map's `bbox` to an overview map
+   * rendered over a wider one.
+   */
+  viewport?: Bbox;
+  /**
+   * Inset a miniature of the whole country into a corner of this map — see
+   * `RenderOptions.inset`. `true` accepts every default.
+   */
+  inset?: boolean | InsetOptions;
   routes?: readonly Route[];
   points?: readonly MapPoint[];
   regionColor?: (regionId: number) => string | undefined;
@@ -125,6 +138,8 @@ export function Naksha({
   sampling,
   coverage,
   ensureRegions,
+  viewport,
+  inset,
 }: NakshaProps) {
   const theme = useMemo(() => resolveTheme(themeInput), [themeInput]);
   const activeRaster = raster ?? nepalRaster();
@@ -142,6 +157,33 @@ export function Naksha({
   );
 
   const clusters = useMemo(() => clusterPoints(grid, points).clusters, [grid, points]);
+
+  // A whole second grid, so it is memoised like the dot field rather than
+  // rebuilt whenever a pin is hovered. Serialised because the common call
+  // passes an object literal, which is a new identity on every render.
+  //
+  // JSON has no form for a function, so `insetKey` cannot see either colouring
+  // callback and both have to be dependencies in their own right: the map's
+  // own `regionColor`, which the inset inherits, and the inset's override.
+  // Measured rather than assumed — with `bbox` hoisted so `grid` keeps its
+  // identity, flipping `inset.regionColor` alone left the miniature on its
+  // previous colours until this dependency was added. An inline `bbox` literal
+  // hides it, because the new grid invalidates the memo on every render.
+  const insetKey = JSON.stringify(inset ?? null);
+  const insetRegionColor = inset && inset !== true ? inset.regionColor : undefined;
+  const insetLayer = useMemo(
+    () =>
+      inset
+        ? renderInset(grid, theme, {
+            // Same default as `renderSvg`: the map's own colouring, so the
+            // miniature is recognisably the same map.
+            regionColor,
+            ...(inset === true ? {} : inset),
+          })
+        : "",
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [grid, theme, insetKey, regionColor, insetRegionColor],
+  );
 
   const svgRef = useRef<SVGSVGElement>(null);
 
@@ -218,6 +260,28 @@ export function Naksha({
       )}
 
       <g dangerouslySetInnerHTML={{ __html: dotField }} />
+
+      {/* Over the dots and under the routes, exactly where `renderSvg` puts it,
+          so the two renderers stack the same layers in the same order. */}
+      {viewport &&
+        (() => {
+          const box = viewportRect(grid, viewport);
+          if (!box) return null;
+          return (
+            <rect
+              className="naksha-viewport"
+              x={box.x}
+              y={box.y}
+              width={box.width}
+              height={box.height}
+              fill={theme.viewportOpacity > 0 ? theme.viewport : "none"}
+              fillOpacity={theme.viewportOpacity > 0 ? theme.viewportOpacity : undefined}
+              stroke={theme.viewport}
+              strokeWidth={theme.viewportWidth}
+              pointerEvents="none"
+            />
+          );
+        })()}
 
       <g className="naksha-routes">
         {routes.map((route, i) => {
@@ -327,6 +391,10 @@ export function Naksha({
       </g>
 
       {children}
+
+      {/* Last, as in `renderSvg`: an inset overlays the field, the routes and
+          the pins it summarises. */}
+      {insetLayer && <g dangerouslySetInnerHTML={{ __html: insetLayer }} />}
     </svg>
   );
 }
