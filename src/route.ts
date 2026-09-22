@@ -8,7 +8,7 @@
 import type { LngLat } from "./geo.ts";
 import type { Bilingual } from "./i18n.ts";
 import type { Grid } from "./grid.ts";
-import { project } from "./grid.ts";
+import { cellAt, isInsideGrid, project, snapPoint } from "./grid.ts";
 
 export interface Stop extends LngLat, Bilingual {
   id?: string;
@@ -87,9 +87,24 @@ export function arcPath(a: Point2, b: Point2, options: ArcOptions = {}): string 
   return `M ${fmt(a.x)} ${fmt(a.y)} Q ${fmt(cx)} ${fmt(cy)} ${fmt(b.x)} ${fmt(b.y)}`;
 }
 
+/**
+ * Where a stop is drawn: the same dot its pin lands on.
+ *
+ * Mirrors `clusterPoints` exactly — `snapPoint`, falling back to the bare cell
+ * — so a route always starts and ends inside its own pins. Projecting the raw
+ * coordinate instead leaves the arc up to ~0.7 units from the pin's centre,
+ * outside the pin for 31 of the 74 district HQs at the national view. A stop
+ * outside the viewport has no dot and no pin, so it keeps its raw projection
+ * and the arc still runs off the frame toward it.
+ */
+function stopPoint(grid: Grid, stop: LngLat): Point2 {
+  const { col, row } = snapPoint(grid, stop) ?? cellAt(grid, stop);
+  return isInsideGrid(grid, col, row) ? { x: col + 0.5, y: row + 0.5 } : project(grid, stop);
+}
+
 /** Full path for a multi-stop route: one quadratic segment per leg. */
 export function routePath(grid: Grid, route: Route, options: ArcOptions = {}): string {
-  const pts = route.stops.map((s) => project(grid, s));
+  const pts = route.stops.map((s) => stopPoint(grid, s));
   if (pts.length < 2) return "";
   return pts
     .slice(0, -1)

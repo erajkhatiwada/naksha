@@ -14,6 +14,7 @@ import {
   collapseRatio,
   arcHeight,
   arcPath,
+  routePath,
   buildGrid,
   VIEWS,
   distanceKm,
@@ -382,6 +383,32 @@ describe("arcs", () => {
     const rtl = arcPath({ x: 10, y: 20 }, { x: 0, y: 20 });
     const cy = (d: string) => Number(d.split("Q")[1].trim().split(/\s+/)[1]);
     assert.ok(cy(ltr) < 20 && cy(rtl) < 20, "both directions should bow toward the top");
+  });
+
+  test("a route starts and ends on the pins of its stops", () => {
+    // Pins snap to a dot; routes used to project the raw coordinate instead,
+    // ending outside the pin for 31 of the 74 HQs at the national view.
+    const grid = nepalGrid();
+    const hqs = DISTRICTS.filter((d) => d.hqAt).map((d) => ({ ...d.hqAt!, label: d.hq! }));
+    for (const hq of hqs) {
+      const [pin] = clusterPoints(grid, [hq]).clusters;
+      const d = routePath(grid, { stops: [hq, { lng: 84, lat: 28.5 }] });
+      const [x, y] = d.split(/\s+/).slice(1, 3).map(Number);
+      assert.ok(
+        Math.hypot(x - pin.x, y - pin.y) < 1e-9,
+        `${hq.label}: route starts at ${x},${y} but its pin is at ${pin.x},${pin.y}`,
+      );
+    }
+  });
+
+  test("a stop outside the viewport keeps its raw projection", () => {
+    const grid = nepalGrid({ bbox: VIEWS.bagmati });
+    const far = { lng: 80.6, lat: 28.7 }; // Dhangadhi, well west of Bagmati
+    const d = routePath(grid, { stops: [far, { lng: 85.32, lat: 27.7 }] });
+    const [x, y] = d.split(/\s+/).slice(1, 3).map(Number);
+    const p = project(grid, far);
+    assert.ok(Math.abs(x - p.x) < 1e-3 && Math.abs(y - p.y) < 1e-3);
+    assert.ok(x < 0, "the arc should still run off the frame toward it");
   });
 });
 
