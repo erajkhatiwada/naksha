@@ -169,6 +169,42 @@ describe("grid", () => {
     const tight = buildGrid(nepalRaster(), { bbox: VALLEY_BOX });
     assert.ok(tight.kmPerDot < wide.kmPerDot / 10);
   });
+
+  test("a rescued dot always sits on ground of the district it names", () => {
+    // A cell skipped for coverage used to leave its rescue target pointing at
+    // the next dot pushed — at height 16, coverage 0.7 that painted Rasuwa,
+    // north of Kathmandu, into Banke ~330 km west.
+    const raster = nepalRaster();
+    const K = 16;
+    const holds = (g: ReturnType<typeof nepalGrid>, col: number, row: number, id: number) => {
+      const { lo, hi, la, ha } = g.bbox;
+      for (let sy = 0; sy < K; sy++) {
+        for (let sx = 0; sx < K; sx++) {
+          const lng = lo + ((col + (sx + 0.5) / K) * (hi - lo)) / g.cols;
+          const lat = ha - ((row + (sy + 0.5) / K) * (ha - la)) / g.rows;
+          if (raster.sampleAt(lng, lat) === id) return true;
+        }
+      }
+      return false;
+    };
+    let rescued = 0;
+    for (const bbox of [VIEWS.nepal, VIEWS.karnali, VIEWS.lumbini]) {
+      for (const height of [10, 12, 14, 16, 40]) {
+        for (const coverage of [0.5, 0.7, 0.9]) {
+          const g = nepalGrid({ bbox, height, coverage });
+          for (const d of g.dots.filter((dot) => dot.granted)) {
+            rescued++;
+            assert.ok(
+              holds(g, d.col, d.row, d.region),
+              `${districtById(d.region)!.name} rescued onto a cell with none of it ` +
+                `(height ${height}, coverage ${coverage}, col ${d.col}, row ${d.row})`,
+            );
+          }
+        }
+      }
+    }
+    assert.ok(rescued > 0, "the sweep should exercise the guarantee pass");
+  });
 });
 
 describe("clustering", () => {
