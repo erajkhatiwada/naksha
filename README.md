@@ -104,7 +104,7 @@ const { renderNepal, districtAt } = require("nepal-naksha");
 </script>
 ```
 
-One `naksha` global, 77 KB minified, 38 KB over the wire.
+One `naksha` global, 91 KB minified, 44 KB gzipped.
 
 ---
 
