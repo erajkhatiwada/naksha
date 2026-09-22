@@ -40,7 +40,8 @@ basemap tiles, no street detail, no geocoding, no live tracking.
 - **Four label-placement rules**, each a measured trade between covering dots
   and moving away from the pin. Multi-line labels place as one block.
 - **Hover, click and keyboard that cost no DOM** — hit-testing is arithmetic, so
-  interaction adds no per-dot elements.
+  interaction adds no per-dot elements. The demo's district view runs fully
+  interactive at [25–26 DOM nodes](#measuring-dom-size).
 - **SSR-safe by construction** — synchronous decode, no `"use client"`, no
   loading state, no top-level await.
 - **Zero runtime dependencies.** ESM, CommonJS and an IIFE global, types
@@ -556,7 +557,9 @@ of nodes — and hover and click don't give that back. The viewBox is
 - **A dot owns its whole cell.** The painted circle is 0.3 units across in a
   1-unit cell, so `:hover` on per-dot elements would leave 70% of the map dead.
 - **Interaction costs no DOM.** `dots: "circles"` exists for per-dot CSS, not for
-  events.
+  events. The demo's district view runs fully interactive at **25 DOM nodes**,
+  one `<path>` per colour, plus a single highlight path in hover mode
+  ([how to measure](#measuring-dom-size)).
 
 ### The decode is synchronous, for SSR
 
@@ -648,6 +651,43 @@ CI runs typecheck, tests and build on Node 22.18, 22 and 24, plus the checks in
 [What's supported](#whats-supported). The generated raster is committed, so
 consumers never rasterize anything; CI rebuilds it and fails on any drift in
 `src/generated`.
+
+### Measuring DOM size
+
+The one figure `npm run verify` can't produce is the DOM node count, because it
+depends on the page rather than the library: which view is on, how many
+colours it paints and whether anything is hovered. The demo counts it for you.
+
+1. `npm run dev` and open <http://localhost:8000>.
+2. Pick a view (**Districts** for the figure quoted above) and an interaction
+   mode.
+3. Read the **DOM nodes** tile under the map.
+
+The tile is `stage.querySelectorAll("*").length`: every element in the map area,
+including the `<svg>` itself, its `<title>` and the background `<rect>`. It is
+counted right after the SVG is rendered, before interactions attach, so in Hover
+mode it reads one lower than the live page. To count the live page, run this in
+the browser console:
+
+```js
+document.querySelectorAll("#stage *").length
+```
+
+Measured in the console at 1440×900:
+
+| View | Hover | Click / Off |
+|---|---|---|
+| Routes | 88 | 87 |
+| Network | 107 | 106 |
+| Districts | 26 | 25 |
+| Find a place | 8 | 7 |
+
+The count follows the number of **colours**, not the number of dots: the field
+is one `<path>` per fill colour, so a new palette, a faded selection or a zoom
+that brings another province into view moves it. The Hover column is one higher
+because hover mode adds a single `naksha-highlight` path when it attaches and
+reuses it for every dot, so moving the pointer never adds nodes. Re-measure after
+changing any of those, rather than carrying the old figure forward.
 
 ---
 
