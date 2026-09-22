@@ -12,7 +12,7 @@
  * valley or city view is named here.
  *
  * `bbox` itself stays unrestricted, and a box that tight is still useful for
- * one thing: separating your own points. 250 pickups around Kathmandu occupy 5
+ * one thing: separating your own points. 250 pickups around Kathmandu occupy 4
  * dots nationally and 221 across the valley. Reach for it when the pins are the
  * subject and the dots are texture — just don't expect a recognisable Nepal
  * behind them.
@@ -31,7 +31,7 @@ export const VIEWS = {
   gandaki: { lo: 82.85, hi: 85.2, la: 27.6, ha: 29.35 },
   lumbini: { lo: 81.6, hi: 84.2, la: 27.35, ha: 29.2 },
   karnali: { lo: 81.0, hi: 83.7, la: 28.3, ha: 30.45 },
-  sudurpashchim: { lo: 80.05, hi: 81.8, la: 28.35, ha: 30.45 },
+  sudurpashchim: { lo: 80.05, hi: 81.8, la: 28.35, ha: 30.48 },
 } as const satisfies Record<string, Bbox>;
 
 export type ViewName = keyof typeof VIEWS;

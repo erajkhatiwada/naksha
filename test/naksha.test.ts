@@ -144,6 +144,15 @@ describe("raster", () => {
       assert.ok(districtByName(name), `missing ${name}`);
     }
   });
+
+  test("Darchula follows the 2020 official map", () => {
+    // Limpiyadhura–Kalapani–Lipulekh. The 2017 boundary stopped at 30.247°N;
+    // the Limpiyadhura corner reaches 30.473°N.
+    const darchula = districtByName("Darchula")!;
+    assert.ok(districtBbox(darchula.id)!.ha > 30.45, "Darchula stops short of Limpiyadhura");
+    // In the Kuti Yankti valley, outside Nepal on the 2017 boundary.
+    assert.equal(districtAt({ lng: 80.75, lat: 30.35 })?.name, "Darchula");
+  });
 });
 
 describe("grid", () => {
@@ -159,12 +168,18 @@ describe("grid", () => {
 
   test("without the guarantee pass, small districts vanish", () => {
     // Documents *why* ensureRegions exists: Bhaktapur is smaller than one
-    // z1 cell, so it can never win a cell on area alone.
-    const bare = buildGrid(nepalRaster(), { ensureRegions: false });
-    assert.ok(
-      bare.regions.size < DISTRICTS.length,
-      "expected at least one district to be lost without ensureRegions",
-    );
+    // z1 cell, so whether it wins a cell on area alone is down to grid phase.
+    // The default frame happens to be a phase where it does, so sweep the
+    // lattice through one cell of latitude rather than trusting a single one.
+    const cell = (NEPAL_BBOX.ha - NEPAL_BBOX.la) / 40;
+    let lost = 0;
+    for (let i = 0; i < 40; i++) {
+      const off = (i / 40) * cell;
+      const bbox = { ...NEPAL_BBOX, la: NEPAL_BBOX.la - off, ha: NEPAL_BBOX.ha - off };
+      if (buildGrid(nepalRaster(), { bbox, ensureRegions: false }).regions.size < DISTRICTS.length) lost++;
+      assert.equal(buildGrid(nepalRaster(), { bbox }).regions.size, DISTRICTS.length);
+    }
+    assert.ok(lost > 0, "expected at least one phase to lose a district without ensureRegions");
   });
 
   test("holds the dot budget roughly constant from country to city core", () => {
@@ -226,27 +241,28 @@ describe("snapping a point to a dot of its own district", () => {
   const index = dotIndex(grid);
   const dotIn = (col: number, row: number) => index.get(row * grid.cols + col);
 
-  /** Lahan: the case this exists for. Real town, 8 km inside Siraha's border. */
-  const LAHAN = { lng: 86.4833, lat: 26.72 };
+  /** Butwal: the case this exists for. Real town, at the foot of the Palpa hills. */
+  const BUTWAL = { lng: 83.4484, lat: 27.7006 };
 
-  test("Lahan pins on Siraha, whose cell is mostly Saptari", () => {
+  test("Butwal pins on Rupandehi, whose cell is mostly Palpa", () => {
     // The premise first: without the correction the pin would land on a dot
-    // painted as another district, contradicting its own "Lahan, Siraha" label
-    // and any regionColor around it. If this ever stops being true the
-    // regression has moved, not gone.
-    const naive = cellAt(grid, LAHAN);
-    assert.equal(districtAt(LAHAN)?.name, "Siraha");
-    assert.equal(districtById(dotIn(naive.col, naive.row)!.region)?.name, "Saptari");
+    // painted as another district, contradicting its own "Butwal, Rupandehi"
+    // label and any regionColor around it. If this ever stops being true the
+    // regression has moved, not gone — which grid phase makes which town the
+    // example is incidental.
+    const naive = cellAt(grid, BUTWAL);
+    assert.equal(districtAt(BUTWAL)?.name, "Rupandehi");
+    assert.equal(districtById(dotIn(naive.col, naive.row)!.region)?.name, "Palpa");
 
-    const snapped = snapPoint(grid, LAHAN)!;
-    assert.equal(districtById(snapped.region)?.name, "Siraha");
+    const snapped = snapPoint(grid, BUTWAL)!;
+    assert.equal(districtById(snapped.region)?.name, "Rupandehi");
   });
 
   test("the pin, the label and the hit-test key all name the same cell", () => {
     // They agree only because they all go through clusterPoints. A pin that
     // moved while data-cluster did not would be unclickable.
-    const [cluster] = clusterPoints(grid, [{ ...LAHAN, label: "Lahan" }]).clusters;
-    const snapped = snapPoint(grid, LAHAN)!;
+    const [cluster] = clusterPoints(grid, [{ ...BUTWAL, label: "Butwal" }]).clusters;
+    const snapped = snapPoint(grid, BUTWAL)!;
     assert.equal(cluster.col, snapped.col);
     assert.equal(cluster.row, snapped.row);
     assert.equal(cluster.x, snapped.col + 0.5);
@@ -283,16 +299,17 @@ describe("snapping a point to a dot of its own district", () => {
     assert.ok(moved > 0, "nothing moved — the measurement below would be vacuous");
     assert.ok(worst <= 1, `worst correction was ${worst.toFixed(2)} dot units`);
     // And the cap does not bind on real data — see SNAP_REACH.
-    assert.ok(worst < 0.8, `expected the measured worst case near 0.79, got ${worst.toFixed(2)}`);
+    assert.ok(worst < 0.8, `expected the measured worst case near 0.71, got ${worst.toFixed(2)}`);
   });
 
   test("rescues a point whose own cell holds no dot at all", () => {
-    // Dhangadhi sits in a cell too empty to earn a dot (coverage < 0.5), so it
-    // used to pin into the blank frame outside the silhouette.
-    const dhangadhi = districtByName("Kailali")!.hqAt!;
-    const cell = cellAt(grid, dhangadhi);
+    // Kakarbhitta, on the eastern border, sits in a cell too empty to earn a
+    // dot (coverage < 0.5), so it used to pin into the blank frame outside the
+    // silhouette.
+    const kakarbhitta = { lng: 88.15, lat: 26.64 };
+    const cell = cellAt(grid, kakarbhitta);
     assert.equal(dotIn(cell.col, cell.row), undefined);
-    assert.equal(snapPoint(grid, dhangadhi)?.region, districtByName("Kailali")!.id);
+    assert.equal(snapPoint(grid, kakarbhitta)?.region, districtByName("Jhapa")!.id);
   });
 
   test("leaves a point outside Nepal exactly where it falls", () => {
@@ -1220,7 +1237,7 @@ describe("headquarters coordinates", () => {
     for (const d of withHq) {
       const { lng, lat } = d.hqAt!;
       assert.ok(lng >= 80.05 && lng <= 88.21, `${d.name} lng ${lng}`);
-      assert.ok(lat >= 26.34 && lat <= 30.45, `${d.name} lat ${lat}`);
+      assert.ok(lat >= 26.34 && lat <= 30.48, `${d.name} lat ${lat}`);
     }
   });
 
@@ -1771,6 +1788,43 @@ describe("a grid aligned to a lattice", () => {
     }
   });
 
+  test("a dot keeps its district across every drag, at every zoom", () => {
+    // Sub-samples are placed from the lattice's own origin, not the field's
+    // edge. From the edge, the rounding moved with the window, and at zoom 2 —
+    // where the sub-sample spacing is exactly 1.6 raster rows, so every fifth
+    // sample sits on a pixel boundary — border dots flipped between districts
+    // as the map was dragged, re-forming the silhouette. `ensureRegions` is off
+    // because its grants are per-viewport by design: a district entering at the
+    // rim is handed a dot there, which is a different claim from sampling.
+    //
+    // The demo's ladder (ZOOM_STEP 2, down to the MIN_ZOOM_SPAN floor at 32),
+    // and at each rung three west-to-east drags — Terai, midhills, Himalaya —
+    // on one held lattice, as the demo holds it between drags until the next
+    // zoom. A dot is compared against every earlier frame, not just the last,
+    // so a flip between two drags is caught too.
+    const failures: string[] = [];
+    for (const zoom of [2, 4, 8, 16, 32]) {
+      const lattice = zoomBbox(NEPAL_BBOX, zoom);
+      const seen = new Map<string, number>();
+      let view = lattice;
+      for (const [name, lat] of [["south", 26.8], ["middle", 28.4], ["north", 29.9]] as const) {
+        let flipped = 0;
+        for (let i = 0; i <= 40; i++) {
+          const lng = NEPAL_BBOX.lo + (i / 40) * (NEPAL_BBOX.hi - NEPAL_BBOX.lo);
+          view = panBbox(view, { lng, lat }, { align: lattice });
+          for (const d of buildGrid(raster, { bbox: view, align: lattice, ensureRegions: false }).dots) {
+            const key = `${d.lng.toFixed(7)},${d.lat.toFixed(7)}`;
+            const was = seen.get(key);
+            if (was !== undefined && was !== d.region) flipped++;
+            seen.set(key, d.region);
+          }
+        }
+        if (flipped) failures.push(`zoom ${zoom}, ${name} drag: ${flipped} dots changed district`);
+      }
+    }
+    assert.deepEqual(failures, []);
+  });
+
   test("the SVG viewBox carries the sub-cell offset, so a pan can glide", () => {
     const lattice = zoomBbox(NEPAL_BBOX, 2);
     const cols = buildGrid(raster, { bbox: lattice, align: lattice }).cols;
@@ -1784,7 +1838,7 @@ describe("a grid aligned to a lattice", () => {
     const grid = buildGrid(raster, { bbox: half, align: lattice });
     assert.ok(Math.abs(grid.viewBox.x - 0.5) < 1e-6, `offset was ${grid.viewBox.x}`);
     const svg = renderSvg(grid);
-    assert.match(svg, /viewBox="0\.5 0 70 40"/);
+    assert.match(svg, new RegExp(`viewBox="0\\.5 0 ${cols} 40"`));
   });
 });
 

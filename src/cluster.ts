@@ -1,7 +1,7 @@
 /**
  * Clustering (spec §8).
  *
- * Not a nice-to-have. At a national view one dot covers ~130 km², so a
+ * Not a nice-to-have. At a national view one dot covers ~134 km², so a
  * delivery operator's entire Kathmandu footprint collapses onto a handful of
  * dots. An `addPin` that silently stacks pins is a bug for that consumer, so
  * snapping and clustering are the same operation and always on.

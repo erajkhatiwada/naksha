@@ -40,7 +40,8 @@ basemap tiles, no street detail, no geocoding, no live tracking.
 - **Four label-placement rules**, each a measured trade between covering dots
   and moving away from the pin. Multi-line labels place as one block.
 - **Hover, click and keyboard that cost no DOM** — hit-testing is arithmetic, so
-  the demo's district view runs fully interactive at 24 nodes.
+  interaction adds no per-dot elements. The demo's district view runs fully
+  interactive at [25–26 DOM nodes](#measuring-dom-size).
 - **SSR-safe by construction** — synchronous decode, no `"use client"`, no
   loading state, no top-level await.
 - **Zero runtime dependencies.** ESM, CommonJS and an IIFE global, types
@@ -236,8 +237,7 @@ East, Rukum East and Rukum West; see [Data](#data).
 
 **What not to do:** reach for `regionAnchor` to place a town whose coordinate you
 don't have. It returns the dot nearest a district's centre of mass — right for
-pointing at *a district*, wrong for a settlement inside one. Against 30 real
-towns it agrees 10% of the time, median miss 15 km, worst 40 km. Label an anchor
+pointing at *a district*, wrong for a settlement inside one. Label an anchor
 with the district's name, not a town's.
 
 ---
@@ -319,8 +319,8 @@ one dot covers one raster cell. [The ladder](#zoom-and-pan-are-arithmetic-on-tha
 shows what each step costs.
 
 `districtBbox(id)` gives a district's bounds, to zoom to one. Two of the 77 are
-narrower than the zoom floor once padded — Bhaktapur at 0.209° and Lalitpur at
-0.255° — so open those out rather than framing them exactly.
+narrower than the zoom floor once padded — Bhaktapur at 0.217° and Lalitpur at
+0.262° — so open those out rather than framing them exactly.
 
 ### Pan
 
@@ -385,8 +385,7 @@ host.addEventListener("pointerdown", (e) => {
 
 Three things if you make that draggable: re-query the SVG (a detached node's
 `getScreenCTM()` returns null, so a drag dies after one move), throttle to
-`requestAnimationFrame` (a full viewport change measures 2.5 ms median, but a
-60-move burst is 60 renders where one will do), and set `touch-action: none` on
+`requestAnimationFrame` (a 60-move burst is 60 renders where one will do), and set `touch-action: none` on
 the wrapper or a touch drag scrolls the page.
 
 ---
@@ -430,7 +429,7 @@ district* at once — no point-in-polygon test, no reprojection, no GeoJSON.
 | Cost per zoom  | 55,176-vertex hit-tests re-run    | one array lookup    |
 | Gives you      | inside/outside                    | inside/outside **and** district |
 
-The shipped raster is 1788 × 1024 (0.45 km/cell), finer than the dot spacing at
+The shipped raster is 1775 × 1024 (0.45 km/cell), finer than the dot spacing at
 any viewport you are likely to pass.
 
 ### The viewport is a bounding box, not a scale factor
@@ -441,15 +440,15 @@ grid fine enough to separate all 753 local levels would need ~14,700 dots.
 
 | Viewport | cols × rows | dots | km/dot | districts | frame filled |
 | -------- | ----------- | ---- | ------ | --------- | ------------ |
-| Nepal | 70 × 40 | 1,130 | 11.40 | 77 | 40% |
-| Bagmati | 51 × 40 | 1,758 | 3.86 | 26 | 86% |
-| Sudurpashchim | 29 × 40 | 808 | 5.85 | 16 | 70% |
+| Nepal | 69 × 40 | 1,113 | 11.56 | 77 | 40% |
+| Bagmati | 51 × 40 | 1,755 | 3.86 | 26 | 86% |
+| Sudurpashchim | 29 × 40 | 803 | 5.84 | 16 | 69% |
 
 `VIEWS` names the country and its seven provinces and stops there — the last
 column is why. A box drawn wholly inside Nepal contains no border, so the
 silhouette is a filled rectangle. `bbox` itself is unrestricted and a box that
 tight still separates your own points well (250 pickups around Kathmandu occupy
-5 dots nationally, 221 across the valley); just don't expect a recognisable
+4 dots nationally, 221 across the valley); just don't expect a recognisable
 Nepal behind them.
 
 ### Zoom and pan are arithmetic on that box
@@ -459,12 +458,12 @@ smaller one. Down to `MIN_ZOOM_SPAN`, each halving of the span:
 
 | Step | lng span | dots | km/dot | districts | cells/dot |
 | ---- | -------- | ----- | ------ | --------- | --------- |
-| 0 | 8.16° | 1,130 | 11.401 | 77 | 25.5 |
-| 1 | 4.08° | 1,995 | 5.701 | 42 | 12.8 |
-| 2 | 2.04° | 2,547 | 2.851 | 18 | 6.4 |
-| 3 | 1.02° | 2,800 | 1.425 | 9 | 3.2 |
-| 4 | 0.51° | 2,800 | 0.713 | 3 | 1.6 |
-| 5 | 0.32° | 2,800 | 0.447 | 3 | 1.0 |
+| 0 | 8.16° | 1,113 | 11.564 | 77 | 25.7 |
+| 1 | 4.08° | 1,956 | 5.783 | 42 | 12.9 |
+| 2 | 2.04° | 2,490 | 2.892 | 18 | 6.4 |
+| 3 | 1.02° | 2,760 | 1.446 | 9 | 3.2 |
+| 4 | 0.51° | 2,760 | 0.723 | 3 | 1.6 |
+| 5 | 0.32° | 2,760 | 0.454 | 3 | 1.0 |
 
 Ground resolution moves 25× down that ladder while the dot count moves 2.5×.
 
@@ -477,28 +476,28 @@ sampling on a lattice the gesture holds still.
 The field is sampled on that lattice and extended to cover the viewport, with
 the sub-cell remainder in `grid.viewBox` — which becomes the SVG's viewBox
 origin, so the map glides rather than stepping a whole dot. Costs one extra row
-and column of dots (4% of the budget), and a dot's ground size then varies up to
-3.4% across a full-country pan instead of the column count varying.
+and column of dots, and a dot's ground size then varies slightly across a
+full-country pan instead of the column count varying.
 
 ### Clustering is the core primitive
 
-At the national view one dot covers ~130 km², so an operator's entire Kathmandu
+At the national view one dot covers ~134 km², so an operator's entire Kathmandu
 footprint collapses onto a handful of dots. Silently stacking pins would be a
 bug, so snapping and clustering are the same operation and always on — and
 **zoom is the declustering mechanism**.
 
-Some headquarters share a dot at the national view: Kathmandu and Lalitpur's are
-3.2 km apart, and one dot spans 11.4 km. Separating them is grid *phase*, not
-resolution — across 40 sub-cell offsets `height: 40` never reaches zero
-collisions, and giving all 77 their own dot would take ~250 rows, a solid fill.
-The cluster badge states what is underneath rather than hiding it.
+Headquarters can share a dot at the national view: Kathmandu and Lalitpur's are
+3.2 km apart, and one dot spans 11.6 km. Whether they do is grid *phase*, not
+resolution — the default frame happens to separate all 74, but 29 of 40
+north–south sub-cell offsets of the same `height: 40` merge at least two. The
+cluster badge states what is underneath rather than hiding it.
 
 Snapping is **district-aware**. A dot belongs to the district covering *most* of
 its cell, so a town near a border often falls in a cell its neighbour wins.
 naksha pins to the nearest dot of the district the coordinate is genuinely in,
 searching no further than **one dot spacing**, so a pin never contradicts its own
-label. Of the 121 headquarters and towns measured, 12 need it; the furthest
-travels 0.79 of a dot spacing.
+label. Of the 121 headquarters and towns measured, 6 need it; the furthest
+travels 0.71 of a dot spacing.
 
 ### Arc height scales with √distance
 
@@ -509,14 +508,14 @@ short hops invisible and long ones a rainbow. naksha uses
 ### Labels cover dots, and placement is the trade
 
 A label's halo is the background colour, so it *erases* the dots under it — on a
-dot map that is data. The frame is 59.6% empty but all of it is outside the
+dot map that is data. The frame is 59.7% empty but all of it is outside the
 outline, so `labelPlacement` is a choice about what to give up.
 
 | | buries its own district | own dots | others | median move |
 |---|---|---|---|---|
-| `above` (default) | 74 of 77 labels | 5.0 | 6.7 | 0.8 |
-| `avoid-region` | 1 of 77 | 0.1 | 5.5 | 5.6 |
-| `clear` | 1 of 77 | 0.0 | 1.2 | 12.8 |
+| `above` (default) | 73 of 77 labels | 5.0 | 6.7 | 0.8 |
+| `avoid-region` | 0 of 77 | 0.0 | 6.0 | 5.4 |
+| `clear` | 0 of 77 | 0.0 | 1.0 | 13.0 |
 
 `avoid-region` refuses to cover dots of the region the point sits in, spilling
 onto a neighbour, so the label still reads as attached. `clear` refuses to cover
@@ -525,8 +524,7 @@ space is off the outline, so labels travel. Both refuse to overlap another label
 or pin, and both fall back rather than refusing to draw.
 
 Dot columns are per-label means; distances are dot-widths from pin to anchor in
-a viewBox 70 wide. The numbers are sample-dependent — the 74 headquarters at
-their real coordinates give 12.0 and 68 of 74. `npm run verify` reprints the
+a viewBox 69 wide. The numbers are sample-dependent. `npm run verify` reprints the
 table from the renderer's own placement functions.
 
 ### Stacking a long name
@@ -544,23 +542,14 @@ renderSvg(grid, {
 });
 ```
 
-| 77 districts, HQ + district + province | box width | hides | buries its own |
-|---|---|---|---|
-| one line, `above` | 22.3 | 43.3 | 26 of 77 |
-| stacked, `above` | 10.2 | 39.4 | 31 of 77 |
-| one line, `avoid-region` | 22.3 | 12.1 | 1 of 77 |
-| stacked, `avoid-region` | 10.2 | **7.9** | **none** |
-
-Stacking narrows the box and makes it taller, which nearly cancels under
-`above`; the win shows once something is searching for the gap. Blank lines are
-dropped, the block grows *upward* so the bottom line stays where a one-line
+Blank lines are dropped, the block grows *upward* so the bottom line stays where a one-line
 label would have been, and the accessible `<title>` keeps your string as written.
 `labelLineHeight` (default 1.2) sets the spacing. One caveat: `above` never
 searches, so a tall block on a far-northern pin can run off the top of the frame.
 
 ### Hit-testing is arithmetic, not DOM
 
-The dot field collapses to one `<path>` per colour — ~1130 dots become a couple
+The dot field collapses to one `<path>` per colour — ~1110 dots become a couple
 of nodes — and hover and click don't give that back. The viewBox is
 `0 0 cols rows`, so the cell under the pointer is `floor(x), floor(y)` and one
 `Map` lookup answers which dot, and therefore which district, is there.
@@ -568,7 +557,9 @@ of nodes — and hover and click don't give that back. The viewBox is
 - **A dot owns its whole cell.** The painted circle is 0.3 units across in a
   1-unit cell, so `:hover` on per-dot elements would leave 70% of the map dead.
 - **Interaction costs no DOM.** `dots: "circles"` exists for per-dot CSS, not for
-  events. The demo's district view runs fully interactive at **24 DOM nodes**.
+  events. The demo's district view runs fully interactive at **25 DOM nodes**,
+  one `<path>` per colour, plus a single highlight path in hover mode
+  ([how to measure](#measuring-dom-size)).
 
 ### The decode is synchronous, for SSR
 
@@ -586,6 +577,11 @@ no `Image`, no canvas, no `fetch` and no top-level await.
 - **Geometry:** [mesaugat/geoJSON-Nepal](https://github.com/mesaugat/geoJSON-Nepal)
   (MIT) — 77 districts with OCHA p-codes and province links, including the
   post-2015 splits.
+- **Darchula's 2020 extent:** [opentechcommunity/map-of-nepal](https://github.com/opentechcommunity/map-of-nepal)
+  (CC BY 4.0, sourced from MOFAGA) — the Limpiyadhura–Kalapani–Lipulekh area
+  added by Nepal's 2020 official map, which the OCHA-derived geometry predates.
+  Only the territory is taken: it fills cells the 77-district source leaves
+  outside Nepal, so no internal boundary moves.
 - **Names:** [sagautam5/local-states-nepal](https://github.com/sagautam5/local-states-nepal)
   (MIT) — Devanagari for districts, provinces and headquarters.
 - **HQ coordinates** cover 74 of 77. The upstream point set is the pre-2015
@@ -623,8 +619,9 @@ Both are arithmetic rather than preference.
    3–5 km *inside* Nepal's real border and clips the far west and the Terai. The
    build fails if the frozen frame stops containing the 77-district source.
 2. **`ensureRegions` should stay on.** Bhaktapur is ~119 km², smaller than one
-   national-view cell (~130 km²), so it never wins a cell on area and would be
-   absent entirely — impossible to highlight, filter or click. It grants every
+   national-view cell (~134 km²), so it wins a cell on area only when the grid
+   phase happens to favour it. At 5 of 40 sub-cell offsets it wins none and would
+   be absent entirely — impossible to highlight, filter or click. It grants every
    visible district its best-covered cell, taking only from districts with dots
    to spare.
 
@@ -654,6 +651,43 @@ CI runs typecheck, tests and build on Node 22.18, 22 and 24, plus the checks in
 [What's supported](#whats-supported). The generated raster is committed, so
 consumers never rasterize anything; CI rebuilds it and fails on any drift in
 `src/generated`.
+
+### Measuring DOM size
+
+The one figure `npm run verify` can't produce is the DOM node count, because it
+depends on the page rather than the library: which view is on, how many
+colours it paints and whether anything is hovered. The demo counts it for you.
+
+1. `npm run dev` and open <http://localhost:8000>.
+2. Pick a view (**Districts** for the figure quoted above) and an interaction
+   mode.
+3. Read the **DOM nodes** tile under the map.
+
+The tile is `stage.querySelectorAll("*").length`: every element in the map area,
+including the `<svg>` itself, its `<title>` and the background `<rect>`. It is
+counted right after the SVG is rendered, before interactions attach, so in Hover
+mode it reads one lower than the live page. To count the live page, run this in
+the browser console:
+
+```js
+document.querySelectorAll("#stage *").length
+```
+
+Measured in the console at 1440×900:
+
+| View | Hover | Click / Off |
+|---|---|---|
+| Routes | 88 | 87 |
+| Network | 107 | 106 |
+| Districts | 26 | 25 |
+| Find a place | 8 | 7 |
+
+The count follows the number of **colours**, not the number of dots: the field
+is one `<path>` per fill colour, so a new palette, a faded selection or a zoom
+that brings another province into view moves it. The Hover column is one higher
+because hover mode adds a single `naksha-highlight` path when it attaches and
+reuses it for every dot, so moving the pointer never adds nodes. Re-measure after
+changing any of those, rather than carrying the old figure forward.
 
 ---
 
