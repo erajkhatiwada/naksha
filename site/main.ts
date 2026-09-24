@@ -20,6 +20,8 @@ import {
   clampBbox,
   districtBbox,
   padBbox,
+  fitAspect,
+  bboxSizeKm,
   bboxContains,
   NEPAL_BBOX,
   MIN_ZOOM_SPAN,
@@ -592,6 +594,8 @@ function render() {
   });
   const renderMs = performance.now() - t1;
 
+  // Keep keyboard focus across the re-render.
+  const hadFocus = stage.contains(document.activeElement);
   stage.innerHTML = svg;
   markPinnedDot();
 
@@ -675,6 +679,7 @@ function render() {
   hint.innerHTML = state.selected ? describeSelection() : defaultHint();
   renderMinimap(theme);
   attach(grid, points, routes);
+  if (hadFocus) stage.querySelector("svg")?.focus({ preventScroll: true });
 }
 
 function describe(): string {
@@ -1036,6 +1041,7 @@ function closeResults() {
   results.hidden = true;
   results.innerHTML = "";
   input.setAttribute("aria-expanded", "false");
+  input.removeAttribute("aria-activedescendant");
   matches = [];
   active = -1;
 }
@@ -1044,7 +1050,11 @@ function showResults(query: string) {
   matches = search(query);
   active = matches.length ? 0 : -1;
   if (!matches.length) {
-    results.innerHTML = `<li class="empty">No district or place matches “${query.trim()}”.</li>`;
+    const empty = document.createElement("li");
+    empty.className = "empty";
+    empty.textContent = `No district or place matches “${query.trim()}”.`;
+    results.replaceChildren(empty);
+    input.removeAttribute("aria-activedescendant");
     results.hidden = false;
     input.setAttribute("aria-expanded", "true");
     return;
@@ -1359,8 +1369,11 @@ stage.addEventListener("click", (e) => {
   if (!at) return;
   const dot = hitTest(currentGrid, at.x, at.y);
   const box = dot ? districtBbox(dot.region) : undefined;
-  if (box && box.hi - box.lo < (state.bbox.hi - state.bbox.lo) * 0.9) {
-    setBbox(clampBbox(atLeastFloor(padBbox(box, 0.12))));
+  // Keep the current aspect, and only zoom in.
+  const { width, height } = bboxSizeKm(state.bbox);
+  const framed = box && clampBbox(atLeastFloor(fitAspect(padBbox(box, 0.12), width / height)));
+  if (framed && framed.hi - framed.lo < (state.bbox.hi - state.bbox.lo) * 0.9) {
+    setBbox(framed);
     return;
   }
   // The cursor is held still, so the thing being pointed at stays under the

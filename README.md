@@ -188,7 +188,7 @@ label reads as a route.
   comes back as `grid.viewBox`. `align: bbox` is the default.
 - `lang: "en" | "np"` — which script to draw. Falls back per label, and
   accessible titles always carry both.
-- `labelPlacement` — `above` (default), `avoid-region`, `clear`, or `below`.
+- `labelPlacement` — `above` (default), `avoid-region`, `clear`, or `none`.
 - `animate` — reveal routes with a dash animation and a pulse. Respects
   `prefers-reduced-motion`; static output is the default, so print and
   server-side rasterization both work.
@@ -229,7 +229,7 @@ is the district HQ, and 74 of the 77 carry a coordinate so they pin exactly:
 
 ```ts
 districtByName("Jumla")!.hq;    // "Chandannath"
-districtByName("Jumla")!.hqAt;  // { lng: 82.186112, lat: 29.288961 }
+districtByName("Jumla")!.hqAt;  // { lng: 82.186127, lat: 29.288977 }
 ```
 
 `hqAt` is null for the three districts the 2015 splits created — Nawalparasi
@@ -251,10 +251,11 @@ step against the element you mounted:
 import { renderNepal, nepalGrid, attachInteractions, districtById } from "nepal-naksha";
 
 const grid = nepalGrid();
-el.innerHTML = renderNepal({ points });
+el.innerHTML = renderNepal({ points, routes });
 
 const detach = attachInteractions(el.querySelector("svg")!, grid, {
   points,            // so pin hits resolve to their cluster
+  routes,            // so route hits resolve
   highlight: true,   // paints the hovered district — one extra <path>
   onRegionEnter: (dot) => setDistrict(districtById(dot.region)), // once per district
   onDotEnter: (dot) => setCoord(dot.lng, dot.lat),               // every dot
@@ -288,9 +289,9 @@ first and its dot as the third argument.
 
 ### Touch and keyboard
 
-- `tolerance` (dot units) widens region hit-testing so a fingertip just off a
-  dot still resolves. Default `0` — exact cell only, so a point outside Nepal is
-  a miss rather than the nearest district.
+- `tolerance` (dot units; `hitTolerance` in React) widens region hit-testing
+  so a fingertip just off a dot still resolves. Default `0` — exact cell only,
+  so a point outside Nepal is a miss rather than the nearest district.
 - `keyboard: true` makes the map focusable and traversable with the arrow keys,
   Enter and Escape, and upgrades `role="img"` to `role="group"`. It **cannot
   announce for you**: pair it with an `aria-live` readout fed from

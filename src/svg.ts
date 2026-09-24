@@ -8,7 +8,7 @@
  * every size in the theme is resolution-independent (spec §10).
  */
 import type { Grid, Dot } from "./grid.ts";
-import { dotIndex, isInsideGrid, project, buildGrid } from "./grid.ts";
+import { dotIndex, isInsideGrid, project, unproject, buildGrid } from "./grid.ts";
 import type { Bbox } from "./geo.ts";
 import type { Theme } from "./theme.ts";
 import { resolveTheme } from "./theme.ts";
@@ -504,8 +504,8 @@ export function placeAbove(
   cy: number,
   pinRadius: number,
   m: LabelMetrics,
-): { box: LabelBox; anchor: string } {
-  let anchor = "middle";
+): { box: LabelBox; anchor: "start" | "middle" | "end" } {
+  let anchor: "start" | "middle" | "end" = "middle";
   let tx = cx;
   const west = grid.viewBox.x + 0.25;
   const east = grid.viewBox.x + grid.viewBox.cols - 0.25;
@@ -516,8 +516,20 @@ export function placeAbove(
     anchor = "end";
     tx = Math.min(east, cx + pinRadius);
   }
-  return { box: labelBox(tx, cy - pinRadius - 0.35 - m.drop, m), anchor };
+  const box = labelBox(tx, cy - pinRadius - 0.35 - m.drop, m);
+  // Flipped anchors draw to one side of x, so the box follows.
+  if (anchor === "start") {
+    box.x0 = tx - HALO;
+    box.x1 = tx + m.halfWidth * 2 + HALO;
+  } else if (anchor === "end") {
+    box.x0 = tx - m.halfWidth * 2 - HALO;
+    box.x1 = tx + HALO;
+  }
+  return { box, anchor };
 }
+
+/** Label halo stroke width, shared with the React wrapper. */
+export const LABEL_HALO_WIDTH = HALO * 2;
 
 /** A hairline from the pin to the nearest edge of a label that has moved away. */
 function leaderPath(cx: number, cy: number, pinRadius: number, box: LabelBox): string {
@@ -603,7 +615,7 @@ function renderRoutes(grid: Grid, theme: Theme, options: RenderOptions, prefix: 
     parts.push(
       // pathLength="1" normalises the dash maths, so one CSS rule reveals every
       // route correctly whether it is 11 km or 800 km long — no JS measurement.
-      `<path id="${id}" class="naksha-route${options.animate ? " naksha-reveal" : ""}"` +
+      `<path id="${esc(id)}" class="naksha-route${options.animate ? " naksha-reveal" : ""}"` +
         (options.animate ? ` pathLength="1"` : "") +
         ` d="${d}" fill="none" stroke="${esc(stroke)}" stroke-width="${fmt(width)}"` +
         ` stroke-linecap="round" stroke-linejoin="round" opacity="${fmt(theme.routeOpacity)}"` +
@@ -762,7 +774,7 @@ function renderPins(
         `<text x="${fmt(box.x)}" y="${fmt(box.y)}" text-anchor="${anchor}"` +
           ` font-size="${fmt(m.size)}" fill="${esc(theme.label)}"` +
           ` font-family="${esc(theme.fontFamily)}" pointer-events="none"` +
-          ` paint-order="stroke" stroke="${esc(theme.background)}" stroke-width="${fmt(HALO * 2)}"` +
+          ` paint-order="stroke" stroke="${esc(theme.background)}" stroke-width="${fmt(LABEL_HALO_WIDTH)}"` +
           `>${body}</text>`,
       );
     }
@@ -870,18 +882,23 @@ export function renderInset(grid: Grid, theme: Theme, options: InsetOptions = {}
         ` stroke="${esc(insetTheme.dot)}" stroke-width="0.15" rx="${fmt(pad)}"/>`
       : "";
 
+  // The visible window, not `grid.bbox` (which is wider under `align`).
+  const vb = grid.viewBox;
+  const nw = unproject(grid, vb.x, vb.y);
+  const se = unproject(grid, vb.x + vb.cols, vb.y + vb.rows);
+  const shown: Bbox = { lo: nw.lng, hi: se.lng, la: se.lat, ha: nw.lat };
+
   // A window around the entire country marks nothing and tints the map it is
   // drawing, so it waits until this map is looking at less than the whole box.
   const zoomed =
-    grid.bbox.hi - grid.bbox.lo < bbox.hi - bbox.lo - 1e-9 ||
-    grid.bbox.ha - grid.bbox.la < bbox.ha - bbox.la - 1e-9;
+    shown.hi - shown.lo < bbox.hi - bbox.lo - 1e-9 || shown.ha - shown.la < bbox.ha - bbox.la - 1e-9;
 
   return (
     `<g class="naksha-inset" transform="translate(${fmt(x)} ${fmt(y)}) scale(${fmt(scale)})"` +
     ` pointer-events="none">` +
     panel +
     renderDots(inner, insetTheme, { regionColor: options.regionColor }) +
-    (zoomed ? renderViewport(inner, insetTheme, grid.bbox) : "") +
+    (zoomed ? renderViewport(inner, insetTheme, shown) : "") +
     `</g>`
   );
 }
