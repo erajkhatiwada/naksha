@@ -1044,7 +1044,11 @@ function showResults(query: string) {
   matches = search(query);
   active = matches.length ? 0 : -1;
   if (!matches.length) {
-    results.innerHTML = `<li class="empty">No district or place matches “${query.trim()}”.</li>`;
+    // textContent, not innerHTML: this is the one string here the visitor typed.
+    const empty = document.createElement("li");
+    empty.className = "empty";
+    empty.textContent = `No district or place matches “${query.trim()}”.`;
+    results.replaceChildren(empty);
     results.hidden = false;
     input.setAttribute("aria-expanded", "true");
     return;
