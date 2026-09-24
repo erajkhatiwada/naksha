@@ -204,6 +204,10 @@ export function buildGrid(raster: RegionRaster, options: GridOptions = {}): Grid
       }
       if (insideCount === 0) continue;
 
+      const cellCoverage = insideCount / samplesPerCell;
+      if (cellCoverage < coverage && sampling !== "center") continue;
+
+      // Only after the coverage check, or `index` points at the next dot pushed.
       let region = 0;
       let bestN = 0;
       for (const v of seen) {
@@ -214,9 +218,6 @@ export function buildGrid(raster: RegionRaster, options: GridOptions = {}): Grid
         const prev = bestCell.get(v);
         if (!prev || tally[v] > prev.score) bestCell.set(v, { index: dots.length, score: tally[v] });
       }
-
-      const cellCoverage = insideCount / samplesPerCell;
-      if (cellCoverage < coverage && sampling !== "center") continue;
 
       dots.push({
         col,

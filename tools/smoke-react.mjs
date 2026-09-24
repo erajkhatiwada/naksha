@@ -90,11 +90,32 @@ function render(React, renderToStaticMarkup, Naksha, label) {
   return html;
 }
 
+/** The wrapper should match `renderSvg` for `align` and edge labels. */
+function parity(React, renderToStaticMarkup, Naksha, core, label) {
+  const lattice = core.zoomBbox(core.NEPAL_BBOX, 2);
+  const bbox = core.panBbox(lattice, { lng: 83.4137, lat: 28.6211 }, { align: lattice });
+  const viewBox = (svg) => svg.match(/viewBox="([^"]+)"/)[1];
+  const aligned = renderToStaticMarkup(React.createElement(Naksha, { bbox, align: lattice }));
+  assert.equal(viewBox(aligned), viewBox(core.renderNepal({ bbox, align: lattice })), `${label}: align ignored`);
+
+  const points = [{ lng: 80.1, lat: 29.9, label: "Mahakali" }];
+  const labelTag = (svg) => svg.match(/<text[^>]*>(?=Mahakali)/)[0];
+  const wrapped = renderToStaticMarkup(React.createElement(Naksha, { points, labels: true }));
+  assert.equal(labelTag(wrapped), labelTag(core.renderNepal({ points, labels: true })), `${label}: label differs`);
+}
+
 // --- require("nepal-naksha/react") ---------------------------------------------
 const cjs = render(
   require("react"),
   require("react-dom/server").renderToStaticMarkup,
   require("../dist/react/index.cjs").Naksha,
+  "cjs",
+);
+parity(
+  require("react"),
+  require("react-dom/server").renderToStaticMarkup,
+  require("../dist/react/index.cjs").Naksha,
+  require("nepal-naksha"),
   "cjs",
 );
 

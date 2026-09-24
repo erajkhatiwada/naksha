@@ -266,9 +266,9 @@ export function nepalGrid(options?: GridOptions): Grid {
  * ```
  */
 export function renderNepal(options: GridOptions & RenderOptions = {}): string {
-  const { height, bbox, sampling, coverage, ensureRegions, ...render } = options;
+  const { height, bbox, sampling, coverage, ensureRegions, align, ...render } = options;
   return renderSvg(
-    nepalGrid({ height, bbox, sampling, coverage, ensureRegions }),
+    nepalGrid({ height, bbox, sampling, coverage, ensureRegions, align }),
     render,
   );
 }

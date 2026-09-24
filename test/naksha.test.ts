@@ -2,6 +2,7 @@ import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 
 import { encodeRle, decodeRle, encodeRleBase64, decodeRleBase64 } from "../src/rle.ts";
+import { measureLabel, placeAbove } from "../src/svg.ts";
 import {
   nepalRaster,
   nepalGrid,
@@ -39,6 +40,7 @@ import {
   zoomBbox,
   panBbox,
   renderInset,
+  viewportRect,
   lightTheme,
   districtBbox,
   bboxSizeKm,
@@ -180,6 +182,35 @@ describe("grid", () => {
       assert.equal(buildGrid(nepalRaster(), { bbox }).regions.size, DISTRICTS.length);
     }
     assert.ok(lost > 0, "expected at least one phase to lose a district without ensureRegions");
+  });
+
+  test("the guarantee pass only grants a district a dot whose cell it is in", () => {
+    const raster = nepalRaster();
+    for (const height of [12, 20, 40]) {
+      const cell = (NEPAL_BBOX.ha - NEPAL_BBOX.la) / height;
+      for (let i = 0; i < 40; i++) {
+        const off = (i / 40) * cell;
+        const grid = buildGrid(raster, {
+          height,
+          bbox: { ...NEPAL_BBOX, la: NEPAL_BBOX.la - off, ha: NEPAL_BBOX.ha - off },
+        });
+        const { bbox, cols, rows } = grid;
+        for (const dot of grid.dots.filter((d) => d.granted)) {
+          let hits = 0;
+          for (let sx = 0; sx < 16; sx++) {
+            for (let sy = 0; sy < 16; sy++) {
+              const lng = bbox.lo + ((dot.col + (sx + 0.5) / 16) * (bbox.hi - bbox.lo)) / cols;
+              const lat = bbox.ha - ((dot.row + (sy + 0.5) / 16) * (bbox.ha - bbox.la)) / rows;
+              if (raster.sampleAt(lng, lat) === dot.region) hits++;
+            }
+          }
+          assert.ok(
+            hits > 0,
+            `height ${height}: ${districtById(dot.region)!.name} granted cell ${dot.col},${dot.row}, which holds none of it`,
+          );
+        }
+      }
+    }
   });
 
   test("holds the dot budget roughly constant from country to city core", () => {
@@ -768,6 +799,19 @@ describe("label placement", () => {
       return (cx - nx) ** 2 + (cy - ny) ** 2 <= 0.3 * 0.3;
     }).length;
     assert.equal(any, 0);
+  });
+
+  test("a flipped above label reports the box it is actually drawn in", () => {
+    const grid = nepalGrid();
+    const m = measureLabel("Mahendranagar", lightTheme);
+    const west = placeAbove(grid, 0.5, 5.5, lightTheme.pinRadius, m);
+    assert.equal(west.anchor, "start");
+    assert.ok(west.box.x0 < west.box.x && west.box.x - west.box.x0 < 0.5);
+    assert.ok(Math.abs(west.box.x1 - west.box.x0 - (m.halfWidth * 2 + 0.5)) < 1e-9);
+    const east = placeAbove(grid, grid.cols - 0.5, 5.5, lightTheme.pinRadius, m);
+    assert.equal(east.anchor, "end");
+    assert.ok(east.box.x1 > east.box.x && east.box.x1 - east.box.x < 0.5);
+    assert.ok(Math.abs(east.box.x1 - east.box.x0 - (m.halfWidth * 2 + 0.5)) < 1e-9);
   });
 
   test("a label that stays put never gets a leader line", () => {
@@ -1727,6 +1771,13 @@ describe("a grid aligned to a lattice", () => {
     assert.equal(renderSvg(aligned), renderSvg(plain));
   });
 
+  test("renderNepal passes align through to the grid", () => {
+    const lattice = zoomBbox(NEPAL_BBOX, 2);
+    const bbox = panBbox(lattice, { lng: 83.4137, lat: 28.6211 }, { align: lattice });
+    assert.equal(renderNepal({ bbox, align: lattice }), renderSvg(buildGrid(raster, { bbox, align: lattice })));
+    assert.doesNotMatch(renderNepal({ bbox, align: lattice }), /viewBox="0 0 /);
+  });
+
   test("a plain grid's window is its whole field", () => {
     const grid = buildGrid(raster, { bbox: VIEWS.nepal });
     assert.deepEqual(grid.viewBox, { x: 0, y: 0, cols: grid.cols, rows: grid.rows });
@@ -1963,6 +2014,20 @@ describe("the inset", () => {
     g.match(/transform="translate\(([-0-9.]+) ([-0-9.]+)\) scale\(([-0-9.]+)\)"/)!
       .slice(1)
       .map(Number);
+
+  test("under align, the window marks the view rather than the sampled field", () => {
+    const raster = nepalRaster();
+    const lattice = zoomBbox(NEPAL_BBOX, 2);
+    const bbox = panBbox(lattice, { lng: 83.4137, lat: 28.6211 }, { align: lattice });
+    const grid = buildGrid(raster, { bbox, align: lattice });
+    assert.notDeepEqual(grid.bbox, bbox, "fixture must put the field past the view");
+    const rect = groupOf(renderSvg(grid, { inset: true }))!.match(
+      /class="naksha-viewport" x="([-0-9.]+)" y="([-0-9.]+)" width="([-0-9.]+)" height="([-0-9.]+)"/,
+    )!;
+    const want = viewportRect(buildGrid(raster, { bbox: NEPAL_BBOX, height: 12 }), bbox)!;
+    for (const [got, exp] of rect.slice(1).map(Number).map((v, i) => [v, [want.x, want.y, want.width, want.height][i]]))
+      assert.ok(Math.abs(got - exp) < 0.001, `${got} vs ${exp}`);
+  });
 
   test("nothing is drawn unless it is asked for", () => {
     assert.equal(groupOf(renderSvg(detail(), {})), undefined);

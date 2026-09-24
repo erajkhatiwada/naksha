@@ -17,7 +17,14 @@ import { useEffect, useMemo, useRef, type CSSProperties, type ReactNode } from "
 import type { GridOptions, Grid, Dot } from "../grid.ts";
 import { buildGrid } from "../grid.ts";
 import type { RenderOptions } from "../svg.ts";
-import { renderDotField, labelLines, viewportRect, renderInset } from "../svg.ts";
+import {
+  renderDotField,
+  viewportRect,
+  renderInset,
+  measureLabel,
+  placeAbove,
+  LABEL_HALO_WIDTH,
+} from "../svg.ts";
 import type { InsetOptions } from "../svg.ts";
 import type { Bbox } from "../geo.ts";
 import type { HighlightOptions } from "../interact.ts";
@@ -138,6 +145,7 @@ export function Naksha({
   sampling,
   coverage,
   ensureRegions,
+  align,
   viewport,
   inset,
 }: NakshaProps) {
@@ -145,8 +153,8 @@ export function Naksha({
   const activeRaster = raster ?? nepalRaster();
 
   const grid: Grid = useMemo(
-    () => buildGrid(activeRaster, { height, bbox, sampling, coverage, ensureRegions }),
-    [activeRaster, height, bbox, sampling, coverage, ensureRegions],
+    () => buildGrid(activeRaster, { height, bbox, sampling, coverage, ensureRegions, align }),
+    [activeRaster, height, bbox, sampling, coverage, ensureRegions, align],
   );
 
   // The expensive, static layer. Rebuilt only when the grid or its colours
@@ -246,7 +254,8 @@ export function Naksha({
   return (
     <svg
       ref={svgRef}
-      viewBox={`0 0 ${grid.cols} ${grid.rows}`}
+      // Same viewBox as `renderSvg`, so `align` works.
+      viewBox={`${fmt(grid.viewBox.x)} ${fmt(grid.viewBox.y)} ${fmt(grid.viewBox.cols)} ${fmt(grid.viewBox.rows)}`}
       role="img"
       aria-label={title}
       className={className ? `naksha ${className}` : "naksha"}
@@ -256,7 +265,13 @@ export function Naksha({
       {animate && <style>{REVEAL_CSS}</style>}
 
       {theme.background !== "transparent" && (
-        <rect width={grid.cols} height={grid.rows} fill={theme.background} />
+        <rect
+          x={grid.viewBox.x}
+          y={grid.viewBox.y}
+          width={grid.viewBox.cols}
+          height={grid.viewBox.rows}
+          fill={theme.background}
+        />
       )}
 
       <g dangerouslySetInnerHTML={{ __html: dotField }} />
@@ -318,8 +333,10 @@ export function Naksha({
           const r = multiple ? theme.pinRadius * 1.5 : theme.pinRadius;
           // Stacked labels grow upward, exactly as `renderSvg` places them, so
           // the bottom line stays where a one-line label would have sat.
-          const lines = multiple ? [] : labelLines(pickLabel(c.points[0] ?? {}, lang) ?? "");
-          const lineGap = theme.labelSize * theme.labelLineHeight;
+          const text = multiple ? undefined : pickLabel(c.points[0] ?? {}, lang);
+          const m = labels && text ? measureLabel(text, theme) : undefined;
+          const lines = m?.lines ?? [];
+          const above = m && lines.length > 0 ? placeAbove(grid, c.x, c.y, r, m) : undefined;
           return (
             <g
               key={`${c.col},${c.row}`}
@@ -361,24 +378,24 @@ export function Naksha({
                   {c.points.length}
                 </text>
               )}
-              {labels && lines.length > 0 && (
+              {m && above && (
                 <text
-                  x={c.x}
-                  y={c.y - r - 0.35 - (lines.length - 1) * lineGap}
-                  textAnchor="middle"
+                  x={above.box.x}
+                  y={above.box.y}
+                  textAnchor={above.anchor}
                   fontSize={theme.labelSize}
                   fill={theme.label}
                   fontFamily={theme.fontFamily}
                   pointerEvents="none"
                   paintOrder="stroke"
                   stroke={theme.background}
-                  strokeWidth={0.25}
+                  strokeWidth={LABEL_HALO_WIDTH}
                 >
                   {/* One <text>, so every halo paints before every glyph and no
                       line erases the descenders of the one above it. */}
                   {lines.length > 1
                     ? lines.map((line, i) => (
-                        <tspan key={i} x={c.x} dy={i > 0 ? lineGap : undefined}>
+                        <tspan key={i} x={above.box.x} dy={i > 0 ? m.lineGap : undefined}>
                           {line}
                         </tspan>
                       ))
