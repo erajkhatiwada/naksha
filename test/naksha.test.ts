@@ -2,6 +2,8 @@ import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 
 import { encodeRle, decodeRle, encodeRleBase64, decodeRleBase64 } from "../src/rle.ts";
+import { measureLabel, placeAbove } from "../src/svg.ts";
+import type { GridOptions } from "../src/grid.ts";
 import {
   nepalRaster,
   nepalGrid,
@@ -39,10 +41,14 @@ import {
   zoomBbox,
   panBbox,
   renderInset,
+  viewportRect,
   lightTheme,
   districtBbox,
   bboxSizeKm,
   aspectWidth,
+  padBbox,
+  fitAspect,
+  DEFAULT_GRID_HEIGHT,
   NEPAL_BBOX,
   MIN_ZOOM_SPAN,
   unproject,
@@ -213,6 +219,35 @@ describe("grid", () => {
       }
     }
     assert.ok(granted > 0);
+  });
+
+  test("the guarantee pass only grants a district a dot whose cell it is in", () => {
+    const raster = nepalRaster();
+    for (const height of [12, 20, 40]) {
+      const cell = (NEPAL_BBOX.ha - NEPAL_BBOX.la) / height;
+      for (let i = 0; i < 40; i++) {
+        const off = (i / 40) * cell;
+        const grid = buildGrid(raster, {
+          height,
+          bbox: { ...NEPAL_BBOX, la: NEPAL_BBOX.la - off, ha: NEPAL_BBOX.ha - off },
+        });
+        const { bbox, cols, rows } = grid;
+        for (const dot of grid.dots.filter((d) => d.granted)) {
+          let hits = 0;
+          for (let sx = 0; sx < 16; sx++) {
+            for (let sy = 0; sy < 16; sy++) {
+              const lng = bbox.lo + ((dot.col + (sx + 0.5) / 16) * (bbox.hi - bbox.lo)) / cols;
+              const lat = bbox.ha - ((dot.row + (sy + 0.5) / 16) * (bbox.ha - bbox.la)) / rows;
+              if (raster.sampleAt(lng, lat) === dot.region) hits++;
+            }
+          }
+          assert.ok(
+            hits > 0,
+            `height ${height}: ${districtById(dot.region)!.name} granted cell ${dot.col},${dot.row}, which holds none of it`,
+          );
+        }
+      }
+    }
   });
 
   test("holds the dot budget roughly constant from country to city core", () => {
@@ -477,6 +512,16 @@ describe("svg", () => {
     });
     assert.doesNotMatch(svg, /<script>/);
     assert.match(svg, /&lt;script&gt;/);
+  });
+
+  test("escapes idPrefix on its way into a route id", () => {
+    const svg = renderNepal({
+      routes: [{ stops: [ktm, pkr] }],
+      idPrefix: '"><script>alert(1)</script><g id="x',
+    });
+    assert.doesNotMatch(svg, /<script>/);
+    assert.match(svg, /id="&quot;&gt;&lt;script&gt;/);
+    assert.equal((svg.match(/ id="[^"]*script/g) ?? []).length, 1);
   });
 
   test("works with no DOM present (SSR safety)", () => {
@@ -801,6 +846,19 @@ describe("label placement", () => {
       return (cx - nx) ** 2 + (cy - ny) ** 2 <= 0.3 * 0.3;
     }).length;
     assert.equal(any, 0);
+  });
+
+  test("a flipped above label reports the box it is actually drawn in", () => {
+    const grid = nepalGrid();
+    const m = measureLabel("Mahendranagar", lightTheme);
+    const west = placeAbove(grid, 0.5, 5.5, lightTheme.pinRadius, m);
+    assert.equal(west.anchor, "start");
+    assert.ok(west.box.x0 < west.box.x && west.box.x - west.box.x0 < 0.5);
+    assert.ok(Math.abs(west.box.x1 - west.box.x0 - (m.halfWidth * 2 + 0.5)) < 1e-9);
+    const east = placeAbove(grid, grid.cols - 0.5, 5.5, lightTheme.pinRadius, m);
+    assert.equal(east.anchor, "end");
+    assert.ok(east.box.x1 > east.box.x && east.box.x1 - east.box.x < 0.5);
+    assert.ok(Math.abs(east.box.x1 - east.box.x0 - (m.halfWidth * 2 + 0.5)) < 1e-9);
   });
 
   test("a label that stays put never gets a leader line", () => {
@@ -1760,6 +1818,36 @@ describe("a grid aligned to a lattice", () => {
     assert.equal(renderSvg(aligned), renderSvg(plain));
   });
 
+  test("renderNepal passes align through to the grid", () => {
+    const lattice = zoomBbox(NEPAL_BBOX, 2);
+    const bbox = panBbox(lattice, { lng: 83.4137, lat: 28.6211 }, { align: lattice });
+    assert.equal(renderNepal({ bbox, align: lattice }), renderSvg(buildGrid(raster, { bbox, align: lattice })));
+    assert.doesNotMatch(renderNepal({ bbox, align: lattice }), /viewBox="0 0 /);
+  });
+
+  test("renderNepal hands every grid option to the grid, not just align", () => {
+    const lattice = zoomBbox(NEPAL_BBOX, 2);
+    const cases: [keyof GridOptions, GridOptions][] = [
+      ["height", { height: 18 }],
+      ["bbox", { bbox: VIEWS.bagmati }],
+      ["sampling", { sampling: "center" }],
+      ["coverage", { coverage: 0.95 }],
+      // Nothing is missing at the national height, so there is no rescue to see.
+      ["ensureRegions", { height: 12, ensureRegions: false }],
+      ["align", { bbox: panBbox(lattice, { lng: 83.4137, lat: 28.6211 }, { align: lattice }), align: lattice }],
+    ];
+    // Per-region colouring, or `ensureRegions` is invisible: the guarantee pass
+    // reassigns a dot rather than adding one, so the default render is identical.
+    const paint = { regionColor: (id: number) => `#${id.toString(16).padStart(6, "0")}` };
+    for (const [key, opt] of cases) {
+      const without = { ...opt };
+      delete without[key];
+      const want = renderSvg(buildGrid(raster, opt), paint);
+      assert.notEqual(want, renderSvg(buildGrid(raster, without), paint), `${key} changes nothing here`);
+      assert.equal(renderNepal({ ...opt, ...paint }), want, `${key} did not reach the grid`);
+    }
+  });
+
   test("a plain grid's window is its whole field", () => {
     const grid = buildGrid(raster, { bbox: VIEWS.nepal });
     assert.deepEqual(grid.viewBox, { x: 0, y: 0, cols: grid.cols, rows: grid.rows });
@@ -1876,6 +1964,30 @@ describe("a grid aligned to a lattice", () => {
 });
 
 describe("district bounds", () => {
+  test("framing a district keeps the frame's shape, whatever the district", () => {
+    // The demo's double-click path. Without `fitAspect` a tall district reshaped
+    // the map — Mahottari took it to 17 columns — so the invariant is that the
+    // column count the frame renders at does not move.
+    const floor = (box: Bbox) => {
+      const width = box.hi - box.lo;
+      return width >= MIN_ZOOM_SPAN ? box : padBbox(box, (MIN_ZOOM_SPAN / width - 1) / 2);
+    };
+    let zoomed = 0;
+    for (const view of [NEPAL_BBOX, VIEWS.bagmati, VIEWS.sudurpashchim]) {
+      const { width, height } = bboxSizeKm(view);
+      const cols = aspectWidth(view, DEFAULT_GRID_HEIGHT);
+      for (const d of DISTRICTS) {
+        const box = districtBbox(d.id)!;
+        const framed = clampBbox(floor(fitAspect(padBbox(box, 0.12), width / height)));
+        // Only zoom in, so a district wider than the view is left to the caller.
+        if (!(framed.hi - framed.lo < (view.hi - view.lo) * 0.9)) continue;
+        zoomed++;
+        assert.equal(aspectWidth(framed, DEFAULT_GRID_HEIGHT), cols, `${d.name} reshaped the frame`);
+      }
+    }
+    assert.ok(zoomed > 150, `expected most districts to frame, got ${zoomed}`);
+  });
+
   test("every district has one, and it holds that district's HQ", () => {
     let withBox = 0;
     let checked = 0;
@@ -1996,6 +2108,20 @@ describe("the inset", () => {
     g.match(/transform="translate\(([-0-9.]+) ([-0-9.]+)\) scale\(([-0-9.]+)\)"/)!
       .slice(1)
       .map(Number);
+
+  test("under align, the window marks the view rather than the sampled field", () => {
+    const raster = nepalRaster();
+    const lattice = zoomBbox(NEPAL_BBOX, 2);
+    const bbox = panBbox(lattice, { lng: 83.4137, lat: 28.6211 }, { align: lattice });
+    const grid = buildGrid(raster, { bbox, align: lattice });
+    assert.notDeepEqual(grid.bbox, bbox, "fixture must put the field past the view");
+    const rect = groupOf(renderSvg(grid, { inset: true }))!.match(
+      /class="naksha-viewport" x="([-0-9.]+)" y="([-0-9.]+)" width="([-0-9.]+)" height="([-0-9.]+)"/,
+    )!;
+    const want = viewportRect(buildGrid(raster, { bbox: NEPAL_BBOX, height: 12 }), bbox)!;
+    for (const [got, exp] of rect.slice(1).map(Number).map((v, i) => [v, [want.x, want.y, want.width, want.height][i]]))
+      assert.ok(Math.abs(got - exp) < 0.001, `${got} vs ${exp}`);
+  });
 
   test("nothing is drawn unless it is asked for", () => {
     assert.equal(groupOf(renderSvg(detail(), {})), undefined);
