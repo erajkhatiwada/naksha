@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import { encodeRle, decodeRle, encodeRleBase64, decodeRleBase64 } from "../src/rle.ts";
 import { measureLabel, placeAbove } from "../src/svg.ts";
+import type { GridOptions } from "../src/grid.ts";
 import {
   nepalRaster,
   nepalGrid,
@@ -45,6 +46,9 @@ import {
   districtBbox,
   bboxSizeKm,
   aspectWidth,
+  padBbox,
+  fitAspect,
+  DEFAULT_GRID_HEIGHT,
   NEPAL_BBOX,
   MIN_ZOOM_SPAN,
   unproject,
@@ -182,6 +186,39 @@ describe("grid", () => {
       assert.equal(buildGrid(nepalRaster(), { bbox }).regions.size, DISTRICTS.length);
     }
     assert.ok(lost > 0, "expected at least one phase to lose a district without ensureRegions");
+  });
+
+  test("a rescued district is granted a cell it actually occupies", () => {
+    // A cell's tally is recorded before the coverage cut. Recording it for a
+    // cell that is then dropped pointed the rescue at whichever cell produced
+    // the next dot — Nawalparasi West painted onto an unrelated cell here.
+    const raster = nepalRaster();
+    const occupies = (grid: ReturnType<typeof buildGrid>, col: number, row: number, id: number) => {
+      const w = (grid.bbox.hi - grid.bbox.lo) / grid.cols;
+      const h = (grid.bbox.ha - grid.bbox.la) / grid.rows;
+      for (let i = 0; i < 16; i++) {
+        for (let j = 0; j < 16; j++) {
+          const lng = grid.bbox.lo + (col + (i + 0.5) / 16) * w;
+          const lat = grid.bbox.ha - (row + (j + 0.5) / 16) * h;
+          if (raster.sampleAt(lng, lat) === id) return true;
+        }
+      }
+      return false;
+    };
+    let granted = 0;
+    for (const bbox of Object.values(VIEWS)) {
+      for (const height of [20, 30, 40]) {
+        for (const coverage of [0.5, 0.9]) {
+          const grid = buildGrid(raster, { bbox, height, coverage });
+          for (const d of grid.dots) {
+            if (!d.granted) continue;
+            granted++;
+            assert.ok(occupies(grid, d.col, d.row, d.region), `${d.region} granted at ${d.col},${d.row}`);
+          }
+        }
+      }
+    }
+    assert.ok(granted > 0);
   });
 
   test("the guarantee pass only grants a district a dot whose cell it is in", () => {
@@ -475,6 +512,16 @@ describe("svg", () => {
     });
     assert.doesNotMatch(svg, /<script>/);
     assert.match(svg, /&lt;script&gt;/);
+  });
+
+  test("escapes idPrefix on its way into a route id", () => {
+    const svg = renderNepal({
+      routes: [{ stops: [ktm, pkr] }],
+      idPrefix: '"><script>alert(1)</script><g id="x',
+    });
+    assert.doesNotMatch(svg, /<script>/);
+    assert.match(svg, /id="&quot;&gt;&lt;script&gt;/);
+    assert.equal((svg.match(/ id="[^"]*script/g) ?? []).length, 1);
   });
 
   test("works with no DOM present (SSR safety)", () => {
@@ -1778,6 +1825,29 @@ describe("a grid aligned to a lattice", () => {
     assert.doesNotMatch(renderNepal({ bbox, align: lattice }), /viewBox="0 0 /);
   });
 
+  test("renderNepal hands every grid option to the grid, not just align", () => {
+    const lattice = zoomBbox(NEPAL_BBOX, 2);
+    const cases: [keyof GridOptions, GridOptions][] = [
+      ["height", { height: 18 }],
+      ["bbox", { bbox: VIEWS.bagmati }],
+      ["sampling", { sampling: "center" }],
+      ["coverage", { coverage: 0.95 }],
+      // Nothing is missing at the national height, so there is no rescue to see.
+      ["ensureRegions", { height: 12, ensureRegions: false }],
+      ["align", { bbox: panBbox(lattice, { lng: 83.4137, lat: 28.6211 }, { align: lattice }), align: lattice }],
+    ];
+    // Per-region colouring, or `ensureRegions` is invisible: the guarantee pass
+    // reassigns a dot rather than adding one, so the default render is identical.
+    const paint = { regionColor: (id: number) => `#${id.toString(16).padStart(6, "0")}` };
+    for (const [key, opt] of cases) {
+      const without = { ...opt };
+      delete without[key];
+      const want = renderSvg(buildGrid(raster, opt), paint);
+      assert.notEqual(want, renderSvg(buildGrid(raster, without), paint), `${key} changes nothing here`);
+      assert.equal(renderNepal({ ...opt, ...paint }), want, `${key} did not reach the grid`);
+    }
+  });
+
   test("a plain grid's window is its whole field", () => {
     const grid = buildGrid(raster, { bbox: VIEWS.nepal });
     assert.deepEqual(grid.viewBox, { x: 0, y: 0, cols: grid.cols, rows: grid.rows });
@@ -1894,6 +1964,30 @@ describe("a grid aligned to a lattice", () => {
 });
 
 describe("district bounds", () => {
+  test("framing a district keeps the frame's shape, whatever the district", () => {
+    // The demo's double-click path. Without `fitAspect` a tall district reshaped
+    // the map — Mahottari took it to 17 columns — so the invariant is that the
+    // column count the frame renders at does not move.
+    const floor = (box: Bbox) => {
+      const width = box.hi - box.lo;
+      return width >= MIN_ZOOM_SPAN ? box : padBbox(box, (MIN_ZOOM_SPAN / width - 1) / 2);
+    };
+    let zoomed = 0;
+    for (const view of [NEPAL_BBOX, VIEWS.bagmati, VIEWS.sudurpashchim]) {
+      const { width, height } = bboxSizeKm(view);
+      const cols = aspectWidth(view, DEFAULT_GRID_HEIGHT);
+      for (const d of DISTRICTS) {
+        const box = districtBbox(d.id)!;
+        const framed = clampBbox(floor(fitAspect(padBbox(box, 0.12), width / height)));
+        // Only zoom in, so a district wider than the view is left to the caller.
+        if (!(framed.hi - framed.lo < (view.hi - view.lo) * 0.9)) continue;
+        zoomed++;
+        assert.equal(aspectWidth(framed, DEFAULT_GRID_HEIGHT), cols, `${d.name} reshaped the frame`);
+      }
+    }
+    assert.ok(zoomed > 150, `expected most districts to frame, got ${zoomed}`);
+  });
+
   test("every district has one, and it holds that district's HQ", () => {
     let withBox = 0;
     let checked = 0;

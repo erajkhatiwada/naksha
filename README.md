@@ -514,7 +514,7 @@ outline, so `labelPlacement` is a choice about what to give up.
 
 | | buries its own district | own dots | others | median move |
 |---|---|---|---|---|
-| `above` (default) | 73 of 77 labels | 5.0 | 6.7 | 0.8 |
+| `above` (default) | 73 of 77 labels | 5.0 | 6.8 | 0.8 |
 | `avoid-region` | 0 of 77 | 0.0 | 6.0 | 5.4 |
 | `clear` | 0 of 77 | 0.0 | 1.0 | 13.0 |
 

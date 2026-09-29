@@ -267,8 +267,16 @@ export function nepalGrid(options?: GridOptions): Grid {
  */
 export function renderNepal(options: GridOptions & RenderOptions = {}): string {
   const { height, bbox, sampling, coverage, ensureRegions, align, ...render } = options;
-  return renderSvg(
-    nepalGrid({ height, bbox, sampling, coverage, ensureRegions, align }),
-    render,
-  );
+  // Annotated with every key of GridOptions made required, so a new grid option
+  // is a compile error here rather than one silently dropped — which is how
+  // `align` came to be ignored.
+  const grid: { [K in keyof Required<GridOptions>]: GridOptions[K] } = {
+    height,
+    bbox,
+    sampling,
+    coverage,
+    ensureRegions,
+    align,
+  };
+  return renderSvg(nepalGrid(grid), render);
 }

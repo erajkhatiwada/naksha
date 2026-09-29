@@ -96,12 +96,29 @@ function parity(React, renderToStaticMarkup, Naksha, core, label) {
   const bbox = core.panBbox(lattice, { lng: 83.4137, lat: 28.6211 }, { align: lattice });
   const viewBox = (svg) => svg.match(/viewBox="([^"]+)"/)[1];
   const aligned = renderToStaticMarkup(React.createElement(Naksha, { bbox, align: lattice }));
+  // Absolute, not parity: both ignoring `align` would agree on `0 0`.
+  assert.doesNotMatch(viewBox(aligned), /^0 0 /, `${label}: align ignored`);
   assert.equal(viewBox(aligned), viewBox(core.renderNepal({ bbox, align: lattice })), `${label}: align ignored`);
 
   const points = [{ lng: 80.1, lat: 29.9, label: "Mahakali" }];
   const labelTag = (svg) => svg.match(/<text[^>]*>(?=Mahakali)/)[0];
   const wrapped = renderToStaticMarkup(React.createElement(Naksha, { points, labels: true }));
   assert.equal(labelTag(wrapped), labelTag(core.renderNepal({ points, labels: true })), `${label}: label differs`);
+
+  // A theme whose sizes do not land on 3 decimals. react-dom prints a float as
+  // it is, so anything not passed through `fmt` shows up here as
+  // y="20.312499999999996" against renderSvg's y="20.312".
+  const odd = {
+    theme: { labelSize: 1.05, labelLineHeight: 1.35 },
+    points: [{ lng: 81.667, lat: 28.1036, label: "Nepalgunj\nBanke" }],
+    labels: true,
+  };
+  const text = (svg) => svg.match(/<text[^>]*>/)[0];
+  const tspans = (svg) => (svg.match(/<tspan[^>]*>/g) ?? []).join("");
+  const oddReact = renderToStaticMarkup(React.createElement(Naksha, odd));
+  const oddCore = core.renderNepal(odd);
+  assert.equal(text(oddReact), text(oddCore), `${label}: label coordinates are not formatted like renderSvg`);
+  assert.equal(tspans(oddReact), tspans(oddCore), `${label}: stacked line offsets differ from renderSvg`);
 }
 
 // --- require("nepal-naksha/react") ---------------------------------------------

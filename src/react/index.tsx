@@ -140,21 +140,22 @@ export function Naksha({
   hitTolerance = 0,
   keyboard = false,
   children,
-  height,
-  bbox,
-  sampling,
-  coverage,
-  ensureRegions,
-  align,
   viewport,
   inset,
+  ...gridOptions
 }: NakshaProps) {
   const theme = useMemo(() => resolveTheme(themeInput), [themeInput]);
   const activeRaster = raster ?? nepalRaster();
 
+  // Taken as a rest, so a new `GridOptions` key reaches the grid without being
+  // named here — `align` was dropped for want of that. Serialised for the same
+  // reason as `insetKey` below: the common call passes `bbox` as an object
+  // literal, which is a new identity on every render and rebuilt the grid.
+  const gridKey = JSON.stringify(gridOptions);
   const grid: Grid = useMemo(
-    () => buildGrid(activeRaster, { height, bbox, sampling, coverage, ensureRegions, align }),
-    [activeRaster, height, bbox, sampling, coverage, ensureRegions, align],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    () => buildGrid(activeRaster, gridOptions),
+    [activeRaster, gridKey],
   );
 
   // The expensive, static layer. Rebuilt only when the grid or its colours
@@ -266,10 +267,10 @@ export function Naksha({
 
       {theme.background !== "transparent" && (
         <rect
-          x={grid.viewBox.x}
-          y={grid.viewBox.y}
-          width={grid.viewBox.cols}
-          height={grid.viewBox.rows}
+          x={fmt(grid.viewBox.x)}
+          y={fmt(grid.viewBox.y)}
+          width={fmt(grid.viewBox.cols)}
+          height={fmt(grid.viewBox.rows)}
           fill={theme.background}
         />
       )}
@@ -380,22 +381,22 @@ export function Naksha({
               )}
               {m && above && (
                 <text
-                  x={above.box.x}
-                  y={above.box.y}
+                  x={fmt(above.box.x)}
+                  y={fmt(above.box.y)}
                   textAnchor={above.anchor}
-                  fontSize={theme.labelSize}
+                  fontSize={fmt(theme.labelSize)}
                   fill={theme.label}
                   fontFamily={theme.fontFamily}
                   pointerEvents="none"
                   paintOrder="stroke"
                   stroke={theme.background}
-                  strokeWidth={LABEL_HALO_WIDTH}
+                  strokeWidth={fmt(LABEL_HALO_WIDTH)}
                 >
                   {/* One <text>, so every halo paints before every glyph and no
                       line erases the descenders of the one above it. */}
                   {lines.length > 1
                     ? lines.map((line, i) => (
-                        <tspan key={i} x={above.box.x} dy={i > 0 ? m.lineGap : undefined}>
+                        <tspan key={i} x={fmt(above.box.x)} dy={i > 0 ? fmt(m.lineGap) : undefined}>
                           {line}
                         </tspan>
                       ))

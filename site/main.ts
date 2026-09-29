@@ -1050,6 +1050,7 @@ function showResults(query: string) {
   matches = search(query);
   active = matches.length ? 0 : -1;
   if (!matches.length) {
+    // textContent, not innerHTML: this is the one string here the visitor typed.
     const empty = document.createElement("li");
     empty.className = "empty";
     empty.textContent = `No district or place matches “${query.trim()}”.`;

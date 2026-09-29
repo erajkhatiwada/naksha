@@ -225,7 +225,7 @@ const ASCENT = 0.8;
 const DESCENT = 0.2;
 
 export interface LabelBox {
-  /** Text anchor point. The box is centred on it horizontally. */
+  /** Text anchor point. Under `start`/`end` the box runs to one side of it. */
   x: number;
   /** Baseline of the *first* line. Later lines hang below it by `drop`. */
   y: number;
@@ -261,9 +261,7 @@ export interface LabelMetrics {
 /**
  * Split a label into drawn lines.
  *
- * Exported for the React wrapper, which renders its own pins and would
- * otherwise draw a two-line name as one long one. Not re-exported from the
- * package root.
+ * Used by `measureLabel`. Not re-exported from the package root.
  */
 export function labelLines(text: string): string[] {
   return text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
