@@ -182,6 +182,39 @@ describe("grid", () => {
     assert.ok(lost > 0, "expected at least one phase to lose a district without ensureRegions");
   });
 
+  test("a rescued district is granted a cell it actually occupies", () => {
+    // A cell's tally is recorded before the coverage cut. Recording it for a
+    // cell that is then dropped pointed the rescue at whichever cell produced
+    // the next dot — Nawalparasi West painted onto an unrelated cell here.
+    const raster = nepalRaster();
+    const occupies = (grid: ReturnType<typeof buildGrid>, col: number, row: number, id: number) => {
+      const w = (grid.bbox.hi - grid.bbox.lo) / grid.cols;
+      const h = (grid.bbox.ha - grid.bbox.la) / grid.rows;
+      for (let i = 0; i < 16; i++) {
+        for (let j = 0; j < 16; j++) {
+          const lng = grid.bbox.lo + (col + (i + 0.5) / 16) * w;
+          const lat = grid.bbox.ha - (row + (j + 0.5) / 16) * h;
+          if (raster.sampleAt(lng, lat) === id) return true;
+        }
+      }
+      return false;
+    };
+    let granted = 0;
+    for (const bbox of Object.values(VIEWS)) {
+      for (const height of [20, 30, 40]) {
+        for (const coverage of [0.5, 0.9]) {
+          const grid = buildGrid(raster, { bbox, height, coverage });
+          for (const d of grid.dots) {
+            if (!d.granted) continue;
+            granted++;
+            assert.ok(occupies(grid, d.col, d.row, d.region), `${d.region} granted at ${d.col},${d.row}`);
+          }
+        }
+      }
+    }
+    assert.ok(granted > 0);
+  });
+
   test("holds the dot budget roughly constant from country to city core", () => {
     for (const bbox of [VIEWS.nepal, VIEWS.bagmati, VALLEY_BOX, CITY_BOX]) {
       const g = buildGrid(nepalRaster(), { bbox });
