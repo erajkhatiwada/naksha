@@ -18,6 +18,8 @@ import type { MapPoint, Cluster } from "./cluster.ts";
 import { clusterPoints } from "./cluster.ts";
 import type { Lang } from "./i18n.ts";
 import { pickLabel, bothLabels } from "./i18n.ts";
+import { formatValue, type Legend } from "./scale.ts";
+import { densityField, densityColor, type DensityField, type DensityOptions } from "./density.ts";
 
 /**
  * Where a stop's label goes relative to its pin.
@@ -51,6 +53,9 @@ import { pickLabel, bothLabels } from "./i18n.ts";
  */
 export type LabelPlacement = "above" | "avoid-region" | "clear" | "none";
 
+/** A corner of the map, where the inset or the legends sit. */
+export type Corner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
+
 /**
  * A miniature of the whole country, inset into a corner of the map itself.
  *
@@ -68,7 +73,7 @@ export type LabelPlacement = "above" | "avoid-region" | "clear" | "none";
  */
 export interface InsetOptions {
   /** Which corner it sits in. Default `"top-right"`. */
-  corner?: "top-left" | "top-right" | "bottom-left" | "bottom-right";
+  corner?: Corner;
   /** Width as a fraction of the map's own width. Default 0.22. */
   size?: number;
   /** Gap from the map's edges, in dot units. Default 1. */
@@ -114,6 +119,36 @@ export interface RenderOptions {
   points?: readonly MapPoint[];
   /** Per-region dot colour. Return undefined to fall back to the theme. */
   regionColor?: (regionId: number) => string | undefined;
+  /**
+   * Per-region dot radius, in dot units. Return undefined to fall back to the
+   * theme's `dotRadius`. `sizeScale` builds one that keeps area proportional
+   * to the value.
+   *
+   * Independent of `regionColor`, so one value can drive colour and another
+   * size on the same map.
+   */
+  regionRadius?: (regionId: number) => number | undefined;
+  /**
+   * Shade dots by how many points land on each, with the theme's `ramp` on a
+   * log scale. Dots holding none are drawn exactly as they otherwise would be,
+   * so this composes with `regionColor` and `regionRadius` — and so their
+   * colour must stay out of the ramp, or an empty dot reads as a value. The
+   * themes' own neutral `dot` does.
+   */
+  density?: DensityOptions;
+  /**
+   * Legends, laid out left to right in one corner on a panel of the theme's
+   * background. `colorScale(...).legend()` and `sizeScale(...).legend()` build
+   * them; `density.legend` adds the density's own. The panel is skipped when
+   * the background is `"transparent"`.
+   */
+  legend?: Legend | readonly Legend[];
+  /**
+   * Which corner the legends sit in. Default `"bottom-left"`, which Nepal's
+   * north-west to south-east sweep leaves empty at the national view. Legends
+   * and the inset do not dodge each other, so keep them in different corners.
+   */
+  legendCorner?: Corner;
   arc?: ArcOptions;
   /**
    * `path` (default) collapses the dot field into one node per colour — ~1200
@@ -554,20 +589,35 @@ function dotOpacity(dot: Dot, theme: Theme): number {
  * memoised, while drawing the interactive layers (routes, pins) as real
  * framework elements with real event handlers.
  */
-export function renderDotField(grid: Grid, theme: Theme, options: RenderOptions = {}): string {
-  return renderDots(grid, theme, options);
+export function renderDotField(
+  grid: Grid,
+  theme: Theme,
+  options: RenderOptions = {},
+  density?: DensityField,
+): string {
+  return renderDots(grid, theme, options, density);
 }
 
-function renderDots(grid: Grid, theme: Theme, options: RenderOptions): string {
+function renderDots(grid: Grid, theme: Theme, options: RenderOptions, density?: DensityField): string {
   const mode = options.dots ?? "path";
-  const fillOf = (d: Dot) => options.regionColor?.(d.region) ?? theme.dot;
+  const shade = (d: Dot) => {
+    const v = density?.values.get(d.row * grid.cols + d.col);
+    return v === undefined ? undefined : densityColor(density!, theme.ramp, v);
+  };
+  const fillOf = (d: Dot) => shade(d) ?? options.regionColor?.(d.region) ?? theme.dot;
+  const radiusOf = (d: Dot) => {
+    const r = options.regionRadius?.(d.region);
+    return r === undefined || !Number.isFinite(r) ? theme.dotRadius : Math.max(0, r);
+  };
 
   if (mode === "circles") {
     const body = grid.dots
       .map((d) => {
         const o = dotOpacity(d, theme);
+        const r = radiusOf(d);
+        if (r <= 0) return "";
         return (
-          `<circle cx="${fmt(d.col + 0.5)}" cy="${fmt(d.row + 0.5)}" r="${fmt(theme.dotRadius)}"` +
+          `<circle cx="${fmt(d.col + 0.5)}" cy="${fmt(d.row + 0.5)}" r="${fmt(r)}"` +
           ` fill="${esc(fillOf(d))}"${o < 1 ? ` opacity="${fmt(o)}"` : ""}` +
           ` data-region="${d.region}"/>`
         );
@@ -577,15 +627,18 @@ function renderDots(grid: Grid, theme: Theme, options: RenderOptions): string {
   }
 
   // Group by fill and a quantised opacity so the field collapses to a handful
-  // of <path> nodes instead of one node per dot.
+  // of <path> nodes instead of one node per dot. Radius is geometry, not an
+  // attribute, so dots of every size share a node.
   const groups = new Map<string, { fill: string; opacity: number; d: string[] }>();
   for (const dot of grid.dots) {
+    const r = radiusOf(dot);
+    if (r <= 0) continue;
     const fill = fillOf(dot);
     const opacity = Math.round(dotOpacity(dot, theme) * 8) / 8;
     const key = `${fill}|${opacity}`;
     let g = groups.get(key);
     if (!g) groups.set(key, (g = { fill, opacity, d: [] }));
-    g.d.push(circleSubpath(dot.col + 0.5, dot.row + 0.5, theme.dotRadius));
+    g.d.push(circleSubpath(dot.col + 0.5, dot.row + 0.5, r));
   }
 
   const body = [...groups.values()]
@@ -901,6 +954,166 @@ export function renderInset(grid: Grid, theme: Theme, options: InsetOptions = {}
   );
 }
 
+/** Inner padding of a legend panel, in dot units. */
+const LEGEND_PAD = 0.7;
+/** Space between two legend panels sharing a corner. */
+const LEGEND_GAP = 0.6;
+/** Gap from the frame, matching the inset's default margin. */
+const LEGEND_MARGIN = 1;
+
+interface LegendCard {
+  w: number;
+  h: number;
+  /** Markup for the card's contents, drawn with its top-left corner at x, y. */
+  draw(x: number, y: number, h: number): string;
+}
+
+/**
+ * One legend's panel, measured.
+ *
+ * Text widths are the same estimate labels use, so a Devanagari title is sized
+ * for Devanagari. Sizes follow the theme's `labelSize`, which keeps a legend in
+ * proportion with the place names on the same map at every zoom.
+ */
+function legendCard(legend: Legend, theme: Theme): LegendCard {
+  const size = theme.labelSize;
+  const tick = size * 0.85;
+  const swatch = size * 0.38;
+  const format = legend.format ?? formatValue;
+  const width = (text: string, s: number) => estimateHalfWidth(text, s) * 2;
+  const text = (x: number, y: number, body: string, s: number, attrs = "") =>
+    `<text x="${fmt(x)}" y="${fmt(y)}" font-size="${fmt(s)}" fill="${esc(theme.label)}"` +
+    ` font-family="${esc(theme.fontFamily)}"${attrs}>${esc(body)}</text>`;
+  const muted = ` fill-opacity="0.7"`;
+  // Baseline that centres a line of text on `cy`, from the same ascent and
+  // descent the label boxes are built on.
+  const middle = (cy: number, s: number) => cy + ((ASCENT - DESCENT) / 2) * s;
+
+  let bodyW: number;
+  let bodyH: number;
+  let body: (x: number, y: number) => string;
+
+  if (legend.kind === "classes") {
+    const labels = legend.breaks.map(format);
+    const step = Math.max(swatch * 2 + 0.9, ...labels.map((l) => width(l, tick) + 0.6));
+    bodyW = swatch * 2 + (legend.colors.length - 1) * step;
+    bodyH = swatch * 2 + (labels.length ? 0.3 + tick : 0);
+    body = (x, y) =>
+      legend.colors
+        .map((c, i) => `<circle cx="${fmt(x + swatch + i * step)}" cy="${fmt(y + swatch)}" r="${fmt(swatch)}" fill="${esc(c)}"/>`)
+        .join("") +
+      // Each threshold sits between the two classes it separates.
+      labels
+        .map((l, i) =>
+          text(x + swatch + (i + 0.5) * step, y + swatch * 2 + 0.3 + ASCENT * tick, l, tick, ` text-anchor="middle"${muted}`),
+        )
+        .join("");
+  } else if (legend.kind === "ramp") {
+    const lo = format(legend.min);
+    const hi = format(legend.max);
+    const pitch = swatch * 2 + 0.25;
+    const run = legend.colors.length * pitch - 0.25;
+    bodyW = width(lo, tick) + 0.4 + run + 0.4 + width(hi, tick);
+    bodyH = Math.max(swatch * 2, tick);
+    body = (x, y) => {
+      const cy = y + bodyH / 2;
+      const x0 = x + width(lo, tick) + 0.4;
+      return (
+        text(x, middle(cy, tick), lo, tick, muted) +
+        legend.colors
+          .map((c, i) => `<circle cx="${fmt(x0 + swatch + i * pitch)}" cy="${fmt(cy)}" r="${fmt(swatch)}" fill="${esc(c)}"/>`)
+          .join("") +
+        text(x0 + run + 0.4, middle(cy, tick), hi, tick, muted)
+      );
+    };
+  } else {
+    const labels = legend.values.map(format);
+    const column = Math.max(0.4, ...legend.radii) * 2;
+    // Unset, the swatches borrow the label colour softened: a size key is about
+    // area, and in the theme's dot colour it would vanish on a pale map.
+    const fill = legend.color
+      ? ` fill="${esc(legend.color)}"`
+      : ` fill="${esc(theme.label)}" fill-opacity="0.55"`;
+    const items = labels.map((l) => column + 0.25 + width(l, tick));
+    bodyW = items.reduce((a, b) => a + b, 0) + Math.max(0, items.length - 1) * 0.7;
+    bodyH = Math.max(column, tick);
+    body = (x, y) => {
+      const cy = y + bodyH / 2;
+      let at = x;
+      return labels
+        .map((l, i) => {
+          const out =
+            `<circle cx="${fmt(at + column / 2)}" cy="${fmt(cy)}" r="${fmt(legend.radii[i])}"${fill}/>` +
+            text(at + column + 0.25, middle(cy, tick), l, tick, muted);
+          at += items[i] + 0.7;
+          return out;
+        })
+        .join("");
+    };
+  }
+
+  const titled = !!legend.title;
+  const top = LEGEND_PAD + (titled ? size + 0.35 : 0);
+  const w = LEGEND_PAD * 2 + Math.max(bodyW, titled ? width(legend.title!, size) : 0);
+  const panel = theme.background && theme.background !== "transparent";
+  return {
+    w,
+    h: top + bodyH + LEGEND_PAD,
+    draw: (x, y, h) =>
+      (panel
+        ? `<rect x="${fmt(x)}" y="${fmt(y)}" width="${fmt(w)}" height="${fmt(h)}" rx="0.45"` +
+          ` fill="${esc(theme.background)}" stroke="${esc(theme.label)}" stroke-opacity="0.15" stroke-width="0.06"/>`
+        : "") +
+      (titled ? text(x + LEGEND_PAD, y + LEGEND_PAD + ASCENT * size, legend.title!, size, ` font-weight="600"`) : "") +
+      body(x + LEGEND_PAD, y + top),
+  };
+}
+
+/**
+ * The legend layer, as one `<g>`, or nothing when there is no legend to draw.
+ *
+ * Exported for the React wrapper, which injects it as it does the inset. Not
+ * re-exported from the package root. Pass the same `DensityField` the dots
+ * were shaded with, so the density legend's numbers are the ones on the map.
+ */
+export function renderLegend(
+  grid: Grid,
+  theme: Theme,
+  options: Pick<RenderOptions, "legend" | "legendCorner" | "density">,
+  density?: DensityField,
+): string {
+  const legends: Legend[] =
+    options.legend === undefined ? [] : "kind" in options.legend ? [options.legend] : [...options.legend];
+  if (options.density?.legend && density && density.values.size) {
+    legends.push({ kind: "ramp", title: options.density.legend, colors: theme.ramp, min: density.min, max: density.max });
+  }
+  // A legend with nothing to show — a size scale over all-zero data has no
+  // reference value worth drawing — would be a titled, empty panel.
+  const drawn = legends.filter((l) => (l.kind === "size" ? l.values.length : l.colors.length) > 0);
+  if (!drawn.length) return "";
+
+  const cards = drawn.map((l) => legendCard(l, theme));
+  const h = Math.max(...cards.map((c) => c.h));
+  const w = cards.reduce((n, c) => n + c.w, 0) + LEGEND_GAP * (cards.length - 1);
+  const corner = options.legendCorner ?? "bottom-left";
+  // The visible window, not the sampled field, which runs past it under `align`.
+  // A row wider or taller than the window keeps its start on screen and runs
+  // off the far side, rather than losing its first legend off the near one.
+  const frame = grid.viewBox;
+  let x = frame.x + Math.max(LEGEND_MARGIN, corner.endsWith("right") ? frame.cols - LEGEND_MARGIN - w : LEGEND_MARGIN);
+  const y = frame.y + Math.max(LEGEND_MARGIN, corner.startsWith("bottom") ? frame.rows - LEGEND_MARGIN - h : LEGEND_MARGIN);
+
+  let body = "";
+  for (const card of cards) {
+    body += card.draw(x, y, h);
+    x += card.w + LEGEND_GAP;
+  }
+  // Not `pointer-events="none"`, unlike the inset: hit-testing is arithmetic,
+  // so a pointer passing through the panel would hover and click the district
+  // hidden under it. `attachInteractions` reads a hit on the legend as no hit.
+  return `<g class="naksha-legend">${body}</g>`;
+}
+
 /**
  * The dash properties live *inside* the keyframes, never in the base rule.
  *
@@ -927,6 +1140,8 @@ export function renderSvg(grid: Grid, options: RenderOptions = {}): string {
   const theme = resolveTheme(options.theme);
   const prefix = options.idPrefix ?? "naksha-";
   const { clusters } = clusterPoints(grid, options.points ?? []);
+  // Once, so the dots and the density legend are read off the same numbers.
+  const density = options.density ? densityField(grid, options.density) : undefined;
 
   const attrs = [
     `xmlns="http://www.w3.org/2000/svg"`,
@@ -955,10 +1170,11 @@ export function renderSvg(grid: Grid, options: RenderOptions = {}): string {
     (options.title ? `<title>${esc(options.title)}</title>` : "") +
     (options.animate ? `<style>${ANIMATION_CSS}</style>` : "") +
     background +
-    renderDots(grid, theme, options) +
+    renderDots(grid, theme, options, density) +
     (options.viewport ? renderViewport(grid, theme, options.viewport) : "") +
     renderRoutes(grid, theme, options, prefix) +
     renderPins(grid, theme, options, clusters) +
+    renderLegend(grid, theme, options, density) +
     // Last, because an inset is an overlay: it has to sit over the field, the
     // routes and the pins it is summarising.
     (options.inset

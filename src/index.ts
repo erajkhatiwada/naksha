@@ -59,8 +59,20 @@ export { arcHeight, arcPath, routePath } from "./route.ts";
 export type { MapPoint, Cluster, ClusterResult } from "./cluster.ts";
 export { clusterPoints, collapseRatio } from "./cluster.ts";
 
-export type { RenderOptions, LabelPlacement, InsetOptions } from "./svg.ts";
+export type { RenderOptions, LabelPlacement, InsetOptions, Corner } from "./svg.ts";
 export { renderSvg, viewportRect, renderInset } from "./svg.ts";
+
+export type {
+  Legend,
+  LegendFormat,
+  ColorScale,
+  ColorScaleOptions,
+  SizeScale,
+  SizeScaleOptions,
+} from "./scale.ts";
+export { colorScale, sizeScale, formatValue } from "./scale.ts";
+
+export type { DensityOptions } from "./density.ts";
 
 export type { InteractionOptions, HighlightOptions, HitKind } from "./interact.ts";
 export { attachInteractions, hitTest, eventPoint } from "./interact.ts";

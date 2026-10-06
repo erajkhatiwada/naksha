@@ -35,6 +35,8 @@ basemap tiles, no street detail, no geocoding, no live tracking.
   headquarters coordinates. Lookups work in either script.
 - **Routes, networks and coverage** — arcs whose height scales with √distance,
   points that snap and cluster onto dots, districts coloured by any value.
+- **Values on the dots** — colour scales with a legend, dot size by value, and
+  point density, each composable with the others on the same map.
 - **Zoom and pan** as arithmetic on a bounding box, with an overview map either
   inset into the SVG or rendered as a second element.
 - **Four label-placement rules**, each a measured trade between covering dots
@@ -104,7 +106,7 @@ const { renderNepal, districtAt } = require("nepal-naksha");
 </script>
 ```
 
-One `naksha` global, 91 KB minified, 44 KB gzipped.
+One `naksha` global, 98 KB minified, 47 KB gzipped.
 
 ---
 
@@ -154,6 +156,9 @@ bundlers and `require()` are fine. Deno and Bun are untested but expected to wor
 | `Region.hqAt` | Where a district's headquarters is, for 74 of the 77 |
 | `pickLabel` / `bothLabels` / `regionName` | Bilingual label helpers |
 | `arcPath` / `arcHeight` / `routePath` | Arc geometry |
+| `colorScale(values, opts?)` | Values to dot colours, in classes or continuous, with a matching legend |
+| `sizeScale(values, opts?)` | Values to dot radii, area proportional to value, with a matching legend |
+| `formatValue(n)` | The short, locale-free number format legends print |
 | `zoomBbox(bbox, factor, opts?)` | Scale a viewport about a point, bounded by the frame and the raster's resolution |
 | `panBbox(bbox, to, opts?)` | Move a viewport to a new centre without changing what the map looks like — the pan half of `zoomBbox` |
 | `clampBbox(bbox, limit?)` | Slide a box back inside the frame, shrinking only if it cannot fit |
@@ -239,6 +244,59 @@ East, Rukum East and Rukum West; see [Data](#data).
 don't have. It returns the dot nearest a district's centre of mass — right for
 pointing at *a district*, wrong for a settlement inside one. Label an anchor
 with the district's name, not a town's.
+
+## Showing values
+
+Colour, size and density are separate options, so they combine on the same dots.
+
+```ts
+import { renderNepal, colorScale, sizeScale } from "nepal-naksha";
+
+const colour = colorScale(orders.values());   // orders: Map<districtId, number>
+const size = sizeScale(stores.values());
+
+renderNepal({
+  regionColor: (id) => colour.color(orders.get(id)),
+  regionRadius: (id) => size.radius(stores.get(id)),
+  legend: [size.legend("Stores"), colour.legend("Orders")],
+});
+
+// Shade each dot by how many points land on it
+renderNepal({ density: { points, legend: "Customers" } });
+```
+
+- **`colorScale`** — five equal-count classes by default, so one outlier can't
+  wash out the rest. Also `mode: "equal"`, `breaks`, or continuous `"linear"` /
+  `"log"`. On a dark map, pass `colors: darkTheme.ramp`.
+- **`sizeScale`** — dot area grows in proportion to the value.
+- **`density`** — exact counts on a log scale; `spread: 1` smooths it into a
+  heatmap, but then a dot can be shaded without holding any point itself.
+- **`legend`** — bottom-left by default; move it with `legendCorner`.
+
+Districts with no value keep the theme's dot, so missing data looks missing.
+
+### Your own colours
+
+Pass `colors` (low to high) to `colorScale`, or set `theme.ramp` for density.
+Legends pick them up automatically.
+
+```ts
+const brand = ["#fee2e2", "#fca5a5", "#ef4444", "#b91c1c", "#7f1d1d"];
+const colour = colorScale(orders.values(), { colors: brand });
+
+renderNepal({
+  regionColor: (id) => colour.color(orders.get(id)),
+  legend: colour.legend("Orders"),
+});
+
+// Density takes its colours from the theme
+renderNepal({ theme: { ramp: brand }, density: { points } });
+```
+
+- Use hex colours so they can blend; any CSS colour works if you pass exactly
+  one per class.
+- Keep your lightest colour distinct from `theme.dot`, or low values will look
+  like missing data.
 
 ---
 

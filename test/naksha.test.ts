@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 
 import { encodeRle, decodeRle, encodeRleBase64, decodeRleBase64 } from "../src/rle.ts";
 import { measureLabel, placeAbove } from "../src/svg.ts";
+import { rampColor, RAMP_STEPS } from "../src/scale.ts";
+import { densityField } from "../src/density.ts";
 import type { GridOptions } from "../src/grid.ts";
 import {
   nepalRaster,
@@ -53,6 +55,10 @@ import {
   MIN_ZOOM_SPAN,
   unproject,
   eventPoint,
+  colorScale,
+  sizeScale,
+  formatValue,
+  darkTheme,
   type LabelPlacement,
   type Bbox,
 } from "../src/index.ts";
@@ -1440,6 +1446,19 @@ describe("dot-level hover events", () => {
   const at = (svg: ReturnType<typeof fakeSvg>, dot: { col: number; row: number }) =>
     svg.fire("pointermove", { clientX: dot.col + 0.5, clientY: dot.row + 0.5 });
 
+  test("the legend panel blocks hits on the dots hidden under it", () => {
+    const { grid, a } = adjacentPair();
+    const svg = fakeSvg();
+    const dots: string[] = [];
+    attachInteractions(svg as never, grid, { onDotEnter: (dot) => dots.push(`${dot.col},${dot.row}`) });
+    const Stub = (globalThis as unknown as { Element: new () => object }).Element;
+    const panel = Object.assign(new Stub(), { closest: (sel: string) => (sel === ".naksha-legend" ? {} : null) });
+    svg.fire("pointermove", { clientX: a.col + 0.5, clientY: a.row + 0.5, target: panel });
+    assert.deepEqual(dots, []);
+    at(svg, a);
+    assert.deepEqual(dots, [`${a.col},${a.row}`]);
+  });
+
   test("a sweep within one district reports every dot, not just the first", () => {
     const { grid, a, b } = adjacentPair();
     const svg = fakeSvg();
@@ -2362,5 +2381,347 @@ describe("the inset's colouring", () => {
     // there is nothing to hand down, so the caller passes it or gets the theme.
     assert.ok(!fillsIn(renderInset(detail(), lightTheme, {})).has("#ff0000"));
     assert.ok(fillsIn(renderInset(detail(), lightTheme, { regionColor: red })).has("#ff0000"));
+  });
+});
+
+/** Every district's area in raster cells — real values with a real skew. */
+function districtAreas(): Map<number, number> {
+  const areas = new Map<number, number>();
+  for (const v of nepalRaster().pixels) if (v !== OUTSIDE) areas.set(v, (areas.get(v) ?? 0) + 1);
+  return areas;
+}
+
+/** The dot field's own <path> nodes, leaving out any legend. */
+const dotPaths = (svg: string) => (svg.match(/<g class="naksha-dots">(.*?)<\/g>/)![1].match(/<path/g) ?? []).length;
+
+describe("colour scales", () => {
+  const areas = districtAreas();
+  const ramp = lightTheme.ramp;
+
+  test("quantile classes hold equal numbers of districts", () => {
+    const scale = colorScale(areas.values());
+    const counts = new Map<string, number>();
+    for (const v of areas.values()) counts.set(scale.color(v)!, (counts.get(scale.color(v)!) ?? 0) + 1);
+    assert.equal(counts.size, 5);
+    // 77 districts into five classes: 15 or 16 apiece.
+    for (const n of counts.values()) assert.ok(n === 15 || n === 16, `class of ${n}`);
+  });
+
+  test("a value on a threshold falls in the class above it", () => {
+    const scale = colorScale([0, 10], { breaks: [5] });
+    assert.equal(scale.color(4.999), scale.colors[0]);
+    assert.equal(scale.color(5), scale.colors[1]);
+  });
+
+  test("equal classes split the range evenly", () => {
+    assert.deepEqual(colorScale([0, 50, 100], { mode: "equal", classes: 4 }).breaks, [25, 50, 75]);
+  });
+
+  test("explicit breaks are sorted, deduplicated and given one more colour", () => {
+    const scale = colorScale([1, 2, 3], { breaks: [20, 10, 10] });
+    assert.deepEqual(scale.breaks, [10, 20]);
+    assert.equal(scale.colors.length, 3);
+  });
+
+  test("classes run the whole ramp, end to end", () => {
+    const { colors } = colorScale(areas.values());
+    assert.equal(colors[0], ramp[0]);
+    assert.equal(colors.at(-1), ramp.at(-1));
+  });
+
+  test("one colour per class is used as given, CSS names included", () => {
+    const named = ["red", "orange", "yellow"];
+    assert.deepEqual(colorScale([1, 2, 3, 4, 5, 6], { classes: 3, colors: named }).colors, named);
+  });
+
+  test("repeated values fold into fewer classes instead of empty ones", () => {
+    // Five of seven districts share the minimum, so naive quantiles would cut
+    // at 1 twice and leave the first class with nothing in it.
+    const scale = colorScale([1, 1, 1, 1, 1, 2, 3]);
+    assert.equal(new Set(scale.breaks).size, scale.breaks.length);
+    assert.ok(scale.breaks.every((b) => b > 1));
+    assert.equal(scale.color(1), scale.colors[0]);
+  });
+
+  test("missing data is undefined, so the dot falls back to the theme", () => {
+    const scale = colorScale(areas.values());
+    for (const v of [undefined, null, Number.NaN]) assert.equal(scale.color(v), undefined);
+    assert.equal(colorScale(areas.values(), { mode: "log" }).color(undefined), undefined);
+  });
+
+  test("a continuous scale is quantised, so the field stays collapsed", () => {
+    const values = Array.from({ length: 1000 }, (_, i) => i);
+    const scale = colorScale(values, { mode: "linear" });
+    assert.equal(scale.color(0), ramp[0]);
+    assert.equal(scale.color(999), ramp.at(-1));
+    assert.ok(new Set(values.map((v) => scale.color(v))).size <= RAMP_STEPS + 1);
+
+    // Measured on the map: continuous colour by district area, with the edge
+    // fade's opacity levels multiplying it, is still tens of nodes, not ~1,100.
+    const log = colorScale(areas.values(), { mode: "log" });
+    const paths = dotPaths(renderNepal({ regionColor: (id) => log.color(areas.get(id)) }));
+    assert.ok(paths < 100, `${paths} dot paths`);
+  });
+
+  test("log puts the geometric middle at the middle of the ramp", () => {
+    const scale = colorScale([1, 10000], { mode: "log" });
+    assert.equal(scale.color(100), rampColor(ramp, 0.5));
+    assert.throws(() => colorScale([0, 5], { mode: "log" }), RangeError);
+  });
+
+  test("a legend describes exactly its scale", () => {
+    const classed = colorScale(areas.values());
+    const legend = classed.legend("Area");
+    assert.ok(legend.kind === "classes");
+    assert.deepEqual([legend.colors, legend.breaks], [classed.colors, classed.breaks]);
+    const ramped = colorScale(areas.values(), { mode: "log" }).legend();
+    assert.ok(ramped.kind === "ramp");
+    assert.deepEqual([ramped.min, ramped.max], [Math.min(...areas.values()), Math.max(...areas.values())]);
+  });
+
+  test("mixes hex stops and steps between anything else", () => {
+    assert.equal(rampColor(["#000000", "#ffffff"], 0.5), "#808080");
+    assert.equal(rampColor(["#000", "#fff"], 0.5), "#808080");
+    assert.equal(rampColor(["black", "white"], 0.4), "black");
+  });
+});
+
+describe("size scales", () => {
+  test("keeps dot area proportional to value", () => {
+    const size = sizeScale([0, 25, 100]);
+    assert.equal(size.radius(100), 0.46);
+    // A quarter of the value is a quarter of the area: half the radius.
+    assert.equal(size.radius(25), 0.23);
+  });
+
+  test("never draws a value smaller than the floor, and skips missing data", () => {
+    const size = sizeScale([1, 10000]);
+    assert.equal(size.radius(1), 0.08);
+    assert.equal(size.radius(0), 0.08);
+    assert.equal(size.radius(-5), 0.08);
+    assert.equal(size.radius(undefined), undefined);
+    assert.equal(sizeScale([0, 4], { min: 0 }).radius(0), 0);
+  });
+
+  test("a legend's reference dots are round numbers the data reaches", () => {
+    const size = sizeScale([3, 340]);
+    const legend = size.legend("Stores");
+    assert.ok(legend.kind === "size");
+    assert.deepEqual(legend.values, [20, 80, 300]);
+    assert.deepEqual(legend.radii, legend.values.map((v) => size.radius(v)));
+  });
+});
+
+describe("formatting legend numbers", () => {
+  test("is short, and keeps small values from rounding to nothing", () => {
+    const cases: [number, string][] = [
+      [0, "0"],
+      [0.0031, "0.0031"],
+      [0.163, "0.16"],
+      [4.52, "4.5"],
+      [36, "36"],
+      [340, "340"],
+      [1234, "1.2k"],
+      [45210, "45k"],
+      [3.4e6, "3.4M"],
+      [-1500, "-1.5k"],
+      // Rounding carries into the next unit rather than printing four digits.
+      [999.95, "1k"],
+      [999999, "1M"],
+      [999.6e6, "1B"],
+      [0.99996, "1"],
+    ];
+    for (const [v, out] of cases) assert.equal(formatValue(v), out, String(v));
+  });
+});
+
+describe("dot size on the map", () => {
+  test("sets each district's radius, and leaves the rest at the theme's", () => {
+    const ktm = districtByName("Kathmandu")!.id;
+    const svg = renderNepal({ dots: "circles", regionRadius: (id) => (id === ktm ? 0.45 : undefined) });
+    const radii = new Set([...svg.matchAll(/r="([\d.]+)" [^>]*data-region="(\d+)"/g)].map((m) => `${m[2] === String(ktm)}:${m[1]}`));
+    assert.deepEqual([...radii].sort(), ["false:0.3", "true:0.45"]);
+  });
+
+  test("a radius of zero draws no dot at all", () => {
+    const ktm = districtByName("Kathmandu")!.id;
+    const svg = renderNepal({ dots: "circles", regionRadius: (id) => (id === ktm ? 0 : undefined) });
+    assert.doesNotMatch(svg, new RegExp(`data-region="${ktm}"`));
+  });
+
+  test("costs no extra nodes: every size shares a path", () => {
+    const areas = districtAreas();
+    const size = sizeScale(areas.values());
+    assert.equal(dotPaths(renderNepal({ regionRadius: (id) => size.radius(areas.get(id)) })), dotPaths(renderNepal({})));
+  });
+});
+
+describe("point density", () => {
+  const hqs = DISTRICTS.filter((d) => d.hqAt).map((d) => ({ ...d.hqAt! }));
+
+  test("counts exactly the points that snap to each dot", () => {
+    const grid = nepalGrid();
+    const field = densityField(grid, { points: hqs });
+    const index = dotIndex(grid);
+    for (const c of clusterPoints(grid, hqs).clusters) {
+      const key = c.row * grid.cols + c.col;
+      assert.equal(field.values.get(key), index.has(key) ? c.points.length : undefined);
+    }
+    const total = [...field.values.values()].reduce((a, b) => a + b, 0);
+    assert.equal(total, hqs.length, "every headquarters is in Nepal and lands on a dot");
+  });
+
+  test("a point's weight counts as that many", () => {
+    const grid = nepalGrid();
+    const field = densityField(grid, { points: [{ ...hqs[0], weight: 7 }] });
+    assert.deepEqual([...field.values.values()], [7]);
+  });
+
+  test("spreading keeps a point's weight, over a disc two widths across", () => {
+    // Deep inside Nepal at the valley view, so no share falls off the field.
+    const grid = nepalGrid({ bbox: VALLEY_BOX });
+    const at = { lng: 85.35, lat: 27.7 };
+    const field = densityField(grid, { points: [at], spread: 1.5 });
+    const total = [...field.values.values()].reduce((a, b) => a + b, 0);
+    assert.ok(Math.abs(total - 1) < 1e-9, `total ${total}`);
+    const centre = snapPoint(grid, at)!;
+    for (const key of field.values.keys()) {
+      const col = key % grid.cols;
+      const row = (key - col) / grid.cols;
+      assert.ok(Math.hypot(col - centre.col, row - centre.row) <= 3);
+    }
+  });
+
+  test("a point outside Nepal shades nothing", () => {
+    const field = densityField(nepalGrid(), { points: [{ lng: 77.2, lat: 28.6 }] });
+    assert.equal(field.values.size, 0);
+  });
+
+  test("dots without points keep their own colour", () => {
+    const svg = renderNepal({ regionColor: () => "#123456", density: { points: [hqs[0]] } });
+    assert.match(svg, /fill="#123456"/);
+    assert.match(svg, new RegExp(`fill="${lightTheme.ramp.at(-1)}"`), "the one dot with a point");
+  });
+});
+
+describe("legends", () => {
+  const areas = districtAreas();
+  const scale = colorScale(areas.values());
+  const panels = (svg: string) =>
+    [...svg.matchAll(/<g class="naksha-legend"[^>]*>.*?<\/g>/g)].flatMap((g) =>
+      [...g[0].matchAll(/<rect x="([-\d.]+)" y="([-\d.]+)" width="([\d.]+)" height="([\d.]+)"/g)].map((m) => ({
+        x: +m[1],
+        y: +m[2],
+        w: +m[3],
+        h: +m[4],
+      })),
+    );
+
+  test("draws nothing unless asked", () => {
+    assert.doesNotMatch(renderNepal({ regionColor: (id) => scale.color(areas.get(id)) }), /naksha-legend/);
+  });
+
+  test("sits in the bottom-left by default, where the national view has no dots", () => {
+    const grid = nepalGrid();
+    const [box] = panels(renderSvg(grid, { legend: scale.legend("Area, in raster cells") }));
+    assert.ok(box.x >= 1 - 1e-9 && box.y + box.h <= grid.rows - 1 + 1e-9);
+    const r = lightTheme.dotRadius;
+    const covered = grid.dots.filter(
+      (d) => d.col + 0.5 + r > box.x && d.col + 0.5 - r < box.x + box.w && d.row + 0.5 + r > box.y && d.row + 0.5 - r < box.y + box.h,
+    );
+    assert.deepEqual(covered, []);
+  });
+
+  test("several legends share a corner without overlapping, right corners included", () => {
+    const size = sizeScale(areas.values());
+    const grid = nepalGrid();
+    for (const corner of ["top-right", "bottom-right", "top-left"] as const) {
+      const boxes = panels(renderSvg(grid, { legend: [size.legend("Size"), scale.legend("Colour")], legendCorner: corner }));
+      assert.equal(boxes.length, 2);
+      assert.ok(boxes[0].x + boxes[0].w <= boxes[1].x);
+      const edge = corner.endsWith("right") ? boxes[1].x + boxes[1].w : boxes[0].x;
+      assert.ok(Math.abs(edge - (corner.endsWith("right") ? grid.cols - 1 : 1)) < 1e-9, corner);
+    }
+  });
+
+  test("follows the visible window under align, not the sampled field", () => {
+    const lattice = zoomBbox(NEPAL_BBOX, 2);
+    const bbox = panBbox(lattice, { lng: 84.6, lat: 28.1 }, { align: lattice });
+    const grid = nepalGrid({ bbox, align: lattice });
+    assert.ok(grid.viewBox.x > 0);
+    const [box] = panels(renderSvg(grid, { legend: scale.legend() }));
+    // Coordinates are written to three decimals.
+    assert.ok(Math.abs(box.x - (grid.viewBox.x + 1)) <= 5e-4, `${box.x} vs ${grid.viewBox.x + 1}`);
+  });
+
+  test("density adds its own legend, numbered off the field it shaded", () => {
+    const hqs = DISTRICTS.filter((d) => d.hqAt).map((d) => ({ ...d.hqAt! }));
+    assert.doesNotMatch(renderNepal({ density: { points: hqs } }), /naksha-legend/);
+    const svg = renderNepal({ density: { points: hqs, legend: "Headquarters" } });
+    const field = densityField(nepalGrid(), { points: hqs });
+    assert.match(svg, />Headquarters</);
+    assert.match(svg, new RegExp(`>${field.min}<.*>${field.max}<`));
+  });
+
+  test("a legend with nothing to show draws nothing", () => {
+    // All zero: no reference value is worth a dot, so there is no panel either.
+    assert.doesNotMatch(renderNepal({ legend: sizeScale([0, 0, 0]).legend("Stores") }), /naksha-legend/);
+  });
+
+  test("a row too wide for the window keeps its start on screen", () => {
+    // A tall, narrow viewport, much narrower than three legends side by side.
+    const grid = nepalGrid({ bbox: { lo: 85.2, hi: 85.5, la: 27.0, ha: 28.6 } });
+    const size = sizeScale(areas.values());
+    for (const corner of ["bottom-right", "top-left"] as const) {
+      const boxes = panels(renderSvg(grid, { legend: [size.legend("Stores"), scale.legend("Area"), scale.legend("Again")], legendCorner: corner }));
+      assert.ok(boxes.at(-1)!.x + boxes.at(-1)!.w > grid.viewBox.cols, "the row really is wider than the window");
+      assert.ok(boxes[0].x >= grid.viewBox.x + 1 - 5e-4 && boxes[0].y >= grid.viewBox.y + 1 - 5e-4, corner);
+    }
+  });
+
+  test("escapes its text, and drops the panel on a transparent background", () => {
+    const svg = renderNepal({ legend: scale.legend("<b>Area</b>"), theme: { background: "transparent" } });
+    assert.match(svg, /&lt;b&gt;Area&lt;\/b&gt;/);
+    assert.equal(panels(svg).length, 0);
+    assert.match(svg, /class="naksha-legend"/);
+  });
+
+  test("the ramp's lowest step never passes for an empty dot", () => {
+    // WCAG contrast for "visible against the background", OKLab distance for
+    // "not the same colour as a dot holding nothing".
+    const lin = (c: number) => ((c /= 255) <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+    const channels = (hex: string) => [1, 3, 5].map((i) => lin(parseInt(hex.slice(i, i + 2), 16)));
+    const lum = (hex: string) => {
+      const [r, g, b] = channels(hex);
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+    const contrast = (a: string, b: string) => {
+      const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
+      return (hi + 0.05) / (lo + 0.05);
+    };
+    const oklab = (hex: string) => {
+      const [r, g, b] = channels(hex);
+      const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+      const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+      const t = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+      return [
+        0.2104542553 * l + 0.793617785 * m - 0.0040720468 * t,
+        1.9779984951 * l - 2.428592205 * m + 0.4505937099 * t,
+        0.0259040371 * l + 0.7827717662 * m - 0.808675766 * t,
+      ];
+    };
+    const deltaE = (a: string, b: string) => 100 * Math.hypot(...oklab(a).map((v, i) => v - oklab(b)[i]));
+    for (const theme of [lightTheme, darkTheme]) {
+      assert.ok(contrast(theme.ramp[0], theme.background) >= 2, `${theme.ramp[0]} on ${theme.background}`);
+      assert.ok(deltaE(theme.ramp[0], theme.dot) >= 10, `${theme.ramp[0]} vs ${theme.dot}`);
+    }
+  });
+
+  test("a dark map's ramp sinks low values into the background", () => {
+    const dark = colorScale([1, 2, 3, 4, 5], { colors: darkTheme.ramp });
+    // Lower luminance at the low end on dark, the reverse of the light theme.
+    const lum = (hex: string) => parseInt(hex.slice(1, 3), 16) + parseInt(hex.slice(3, 5), 16) + parseInt(hex.slice(5, 7), 16);
+    assert.ok(lum(dark.colors[0]) < lum(dark.colors.at(-1)!));
+    assert.ok(lum(lightTheme.ramp[0]) > lum(lightTheme.ramp.at(-1)!));
   });
 });

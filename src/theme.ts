@@ -20,6 +20,21 @@ export interface Theme {
    */
   edgeFade: number;
 
+  /**
+   * Sequential colours, low to high, for anything that shades dots by
+   * magnitude: `density`, and the default for `colorScale`.
+   *
+   * One hue, light to dark on a light map. The dark theme runs it the other
+   * way, so low values sink into the background and high ones stand out of it;
+   * kept in the light theme's order, the emptiest dots would glow brightest.
+   *
+   * Neither starts at the faintest step it could. The low end has to clear 2:1
+   * against the background and stay clearly apart from the theme's `dot` —
+   * a dot holding one point must never pass for an empty one — and five steps
+   * is as many as that range holds with every neighbour still distinct.
+   */
+  ramp: readonly string[];
+
   /** Route stroke. */
   route: string;
   routeWidth: number;
@@ -102,6 +117,8 @@ export const lightTheme: Theme = {
   dotOpacity: 1,
   edgeFade: 0.6,
 
+  ramp: ["#86b6ef", "#5598e7", "#2a78d6", "#1c5cab", "#0d366b"],
+
   route: "#dc2626",
   routeWidth: 0.14,
   routeOpacity: 0.95,
@@ -130,6 +147,7 @@ export const darkTheme: Theme = {
   ...lightTheme,
   background: "#0b1120",
   dot: "#1e293b",
+  ramp: ["#184f95", "#2a78d6", "#6da7ec", "#9ec5f4", "#cde2fb"],
   route: "#f87171",
   pin: "#f87171",
   pinHalo: "#0b1120",

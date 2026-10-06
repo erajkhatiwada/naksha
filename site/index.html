@@ -200,6 +200,7 @@
             <button data-mode="routes" class="on">Routes</button>
             <button data-mode="network">Network</button>
             <button data-mode="districts">Districts</button>
+            <button data-mode="data">Data</button>
             <button data-mode="find">Find a place</button>
           </div>
         </div>
@@ -224,6 +225,29 @@
           <div class="segmented" id="context">
             <button data-context="on">On</button>
             <button data-context="off" class="on">Off</button>
+          </div>
+        </div>
+        <div class="control" id="encoding-control">
+          <label>Encoding</label>
+          <div class="segmented" id="encoding">
+            <button data-encoding="colour" class="on">Colour</button>
+            <button data-encoding="size">Size</button>
+            <button data-encoding="both">Both</button>
+            <button data-encoding="density">Density</button>
+          </div>
+        </div>
+        <div class="control" id="scale-control">
+          <label>Colour scale</label>
+          <div class="segmented" id="scale">
+            <button data-scale="quantile" class="on">5 classes</button>
+            <button data-scale="log">Continuous</button>
+          </div>
+        </div>
+        <div class="control" id="spread-control">
+          <label>Density</label>
+          <div class="segmented" id="spread">
+            <button data-spread="exact" class="on">Exact</button>
+            <button data-spread="smoothed">Smoothed</button>
           </div>
         </div>
           </div>
@@ -573,7 +597,7 @@ if (d) console.log(d.name, d.nameNp); // Kathmandu काठमाडौँ</cod
           <pre><code>&lt;div id="map"&gt;&lt;/div&gt;
 &lt;script src="https://unpkg.com/nepal-naksha"&gt;&lt;/script&gt;
 &lt;script&gt;
-  // One global. 44 KB gzipped, no loader,
+  // One global. 47 KB gzipped, no loader,
   // no bundler, nothing to configure.
   var stops = [
     { lng: 85.3591, lat: 27.6966, label: "Kathmandu" },

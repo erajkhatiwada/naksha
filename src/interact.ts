@@ -265,6 +265,10 @@ export function attachInteractions<T extends MapPoint = MapPoint>(
   function resolve(e: MouseEvent): Hit<T> | null {
     const el = e.target instanceof Element ? e.target : null;
 
+    // The legend panel covers the field; what is under it cannot be seen, so it
+    // cannot be what the pointer means.
+    if (el?.closest?.(".naksha-legend")) return null;
+
     const pin = el?.closest?.("[data-cluster]");
     if (pin) {
       const key = pin.getAttribute("data-cluster") ?? "";
