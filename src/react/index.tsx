@@ -19,6 +19,7 @@ import { buildGrid } from "../grid.ts";
 import type { RenderOptions } from "../svg.ts";
 import {
   renderDotField,
+  renderLegend,
   viewportRect,
   renderInset,
   measureLabel,
@@ -37,6 +38,7 @@ import type { Region } from "../raster.ts";
 import type { RegionRaster } from "../raster.ts";
 import type { Lang } from "../i18n.ts";
 import { pickLabel, bothLabels } from "../i18n.ts";
+import { densityField } from "../density.ts";
 
 export interface NakshaProps extends GridOptions {
   /** Defaults to Nepal's 77 districts. */
@@ -56,6 +58,13 @@ export interface NakshaProps extends GridOptions {
   routes?: readonly Route[];
   points?: readonly MapPoint[];
   regionColor?: (regionId: number) => string | undefined;
+  /** Per-district dot radius — see `RenderOptions.regionRadius`. */
+  regionRadius?: RenderOptions["regionRadius"];
+  /** Shade dots by how many points land on each — see `RenderOptions.density`. */
+  density?: RenderOptions["density"];
+  /** Legends in a corner — see `RenderOptions.legend`. */
+  legend?: RenderOptions["legend"];
+  legendCorner?: RenderOptions["legendCorner"];
   arc?: RenderOptions["arc"];
   /** Draw stop labels above their pins. Newlines in a label stack it. */
   labels?: boolean;
@@ -117,6 +126,10 @@ export function Naksha({
   routes = [],
   points = [],
   regionColor,
+  regionRadius,
+  density,
+  legend,
+  legendCorner,
   arc,
   labels,
   lang = "en",
@@ -158,11 +171,26 @@ export function Naksha({
     [activeRaster, gridKey],
   );
 
+  // Keyed on the points and the spread rather than on `density` itself, which
+  // is usually an object literal and a new identity on every render. Shared by
+  // the dots and the legend, so the legend's numbers are the ones on the map.
+  const field = useMemo(
+    () => (density ? densityField(grid, density) : undefined),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [grid, density?.points, density?.spread],
+  );
+
   // The expensive, static layer. Rebuilt only when the grid or its colours
   // change — not when a route is hovered or a pin is selected.
   const dotField = useMemo(
-    () => renderDotField(grid, theme, { regionColor }),
-    [grid, theme, regionColor],
+    () => renderDotField(grid, theme, { regionColor, regionRadius }, field),
+    [grid, theme, regionColor, regionRadius, field],
+  );
+
+  const legendLayer = useMemo(
+    () => renderLegend(grid, theme, { legend, legendCorner, density }, field),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [grid, theme, legend, legendCorner, density?.legend, field],
   );
 
   const clusters = useMemo(() => clusterPoints(grid, points).clusters, [grid, points]);
@@ -199,20 +227,24 @@ export function Naksha({
   // Handlers are read through a ref so an inline arrow function — which is what
   // every caller writes — doesn't tear down and re-attach the listeners on
   // every render. Only *whether* a handler exists is a dependency.
+  // `regionRadius` rides along for the same reason: it is usually an inline
+  // arrow too, and the highlight only needs whichever one is current.
   const latest = useRef({
     onRegionEnter,
     onRegionLeave,
     onRegionClick,
     onDotEnter,
     onDotLeave,
+    regionRadius,
   });
-  latest.current = { onRegionEnter, onRegionLeave, onRegionClick, onDotEnter, onDotLeave };
+  latest.current = { onRegionEnter, onRegionLeave, onRegionClick, onDotEnter, onDotLeave, regionRadius };
 
   const wantsEnter = !!onRegionEnter;
   const wantsLeave = !!onRegionLeave;
   const wantsClick = !!onRegionClick;
   const wantsDotEnter = !!onDotEnter;
   const wantsDotLeave = !!onDotLeave;
+  const sized = !!regionRadius;
   const highlightKey = JSON.stringify(highlight ?? null);
 
   useEffect(() => {
@@ -225,6 +257,7 @@ export function Naksha({
       highlight,
       keyboard,
       tolerance: hitTolerance,
+      regionRadius: sized ? (id) => latest.current.regionRadius?.(id) : undefined,
       // Pins and routes are React elements here, with React handlers. They are
       // still recognised by their data attributes, which is what stops a region
       // event firing for the dot underneath a pin.
@@ -250,6 +283,7 @@ export function Naksha({
     highlightKey,
     keyboard,
     hitTolerance,
+    sized,
   ]);
 
   return (
@@ -409,6 +443,8 @@ export function Naksha({
       </g>
 
       {children}
+
+      {legendLayer && <g dangerouslySetInnerHTML={{ __html: legendLayer }} />}
 
       {/* Last, as in `renderSvg`: an inset overlays the field, the routes and
           the pins it summarises. */}

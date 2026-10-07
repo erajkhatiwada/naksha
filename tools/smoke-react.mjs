@@ -100,6 +100,24 @@ function parity(React, renderToStaticMarkup, Naksha, core, label) {
   assert.doesNotMatch(viewBox(aligned), /^0 0 /, `${label}: align ignored`);
   assert.equal(viewBox(aligned), viewBox(core.renderNepal({ bbox, align: lattice })), `${label}: align ignored`);
 
+  // Size, density and legends come out of the same core strings, so the two
+  // renderers must agree on every byte of the dot field and the legend.
+  const hqs = core.DISTRICTS.filter((d) => d.hqAt).map((d) => d.hqAt);
+  const ids = core.DISTRICTS.map((d) => d.id);
+  const size = core.sizeScale(ids);
+  const colour = core.colorScale(ids);
+  const data = {
+    regionColor: (id) => colour.color(id),
+    regionRadius: (id) => size.radius(id),
+    density: { points: hqs, spread: 1, legend: "HQs" },
+    legend: [size.legend("Size"), colour.legend("Colour")],
+  };
+  const layer = (svg, cls) => svg.match(new RegExp(`<g class="${cls}"[^>]*>.*?</g>(?=<)`))[0];
+  const dataReact = renderToStaticMarkup(React.createElement(Naksha, data));
+  const dataCore = core.renderNepal(data);
+  assert.equal(layer(dataReact, "naksha-dots"), layer(dataCore, "naksha-dots"), `${label}: data dots differ`);
+  assert.equal(layer(dataReact, "naksha-legend"), layer(dataCore, "naksha-legend"), `${label}: legend differs`);
+
   const points = [{ lng: 80.1, lat: 29.9, label: "Mahakali" }];
   const labelTag = (svg) => svg.match(/<text[^>]*>(?=Mahakali)/)[0];
   const wrapped = renderToStaticMarkup(React.createElement(Naksha, { points, labels: true }));

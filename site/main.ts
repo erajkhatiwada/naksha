@@ -33,6 +33,9 @@ import {
   regionAnchor,
   regionName,
   regionProvince,
+  colorScale,
+  sizeScale,
+  formatValue,
   type Cluster,
   type Dot,
   type Theme,
@@ -44,6 +47,8 @@ import {
   type LngLat,
   type Bbox,
   type ViewName,
+  type Legend,
+  type RenderOptions,
 } from "../src/index.ts";
 
 // ---------------------------------------------------------------- data ---
@@ -132,6 +137,48 @@ const LOCATIONS: Place[] = [
 const PROVINCE_COLORS = [
   "#ef4444", "#f97316", "#eab308", "#22c55e", "#0ea5e9", "#8b5cf6", "#ec4899",
 ];
+
+// ------------------------------------------------------ illustrative data ---
+
+/**
+ * Made-up figures for the Data view, and labelled as such on the page.
+ *
+ * Generated rather than typed in so they have a believable shape — highest
+ * around the cities, fading with distance — without anyone mistaking them for
+ * real statistics. Seeded, so every visit draws the same map.
+ */
+const ILLUSTRATIVE = (() => {
+  let seed = 7;
+  const rnd = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296;
+  const gauss = () => Math.sqrt(-2 * Math.log(rnd() + 1e-12)) * Math.cos(2 * Math.PI * rnd());
+  // City, and how strongly it pulls: weights are invented for the demo.
+  const pulls: [Place, number][] = [
+    [KTM, 12], [HUBS[0], 6], [HUBS[1], 6], [HUBS[7], 4], [HUBS[2], 3], [HUBS[3], 3], [HUBS[5], 2],
+    [HUBS[6], 1], ...LOCATIONS.filter((p) => ["Birgunj", "Butwal", "Janakpur", "Dharan", "Hetauda"].includes(p.label))
+      .map((p) => [p, 3] as [Place, number]),
+  ];
+  const near = (at: LngLat, km: number) =>
+    pulls.reduce((n, [p, w]) => n + w * Math.exp(-distanceKm(at, p) / km), 0);
+  const orders = new Map<number, number>();
+  const stores = new Map<number, number>();
+  for (const d of DISTRICTS) {
+    const bb = districtBbox(d.id)!;
+    const at = d.hqAt ?? { lng: (bb.lo + bb.hi) / 2, lat: (bb.la + bb.ha) / 2 };
+    orders.set(d.id, Math.round(4 + 9 * near(at, 45) * (0.8 + 0.4 * rnd())));
+    stores.set(d.id, Math.round(2 + 14 * near(at, 70) * (0.7 + 0.6 * rnd())));
+  }
+  const customers: LngLat[] = [];
+  for (const [p, w] of pulls) {
+    const km = 3 + Math.sqrt(w) * 2.2;
+    for (let i = 0; i < w * 140; i++) {
+      customers.push({
+        lng: p.lng + (gauss() * km) / (111.32 * Math.cos((p.lat * Math.PI) / 180)),
+        lat: p.lat + (gauss() * km) / 111.32,
+      });
+    }
+  }
+  return { orders, stores, customers };
+})();
 
 // -------------------------------------------------------------- finder ---
 
@@ -234,9 +281,19 @@ function search(query: string, limit = 8): Entry[] {
 
 // --------------------------------------------------------------- state ---
 
-type Mode = "routes" | "network" | "districts" | "find";
+type Mode = "routes" | "network" | "districts" | "data" | "find";
 
-const MODES: Mode[] = ["routes", "network", "districts", "find"];
+const MODES: Mode[] = ["routes", "network", "districts", "data", "find"];
+
+/** What the Data view puts on the dots. `both` is size and colour at once. */
+type Encoding = "colour" | "size" | "both" | "density";
+const ENCODINGS: Encoding[] = ["colour", "size", "both", "density"];
+
+/** `?mode=data&encoding=density&scale=log&spread=smoothed` deep-links it. */
+function initialEncoding(): Encoding {
+  const requested = new URLSearchParams(location.search).get("encoding");
+  return ENCODINGS.includes(requested as Encoding) ? (requested as Encoding) : "colour";
+}
 
 /**
  * How the map answers the pointer.
@@ -386,6 +443,10 @@ const state = {
    * the accent colour with the pin reads as part of the selection.
    */
   context: initialContext(),
+  /** The Data view's encoding, colour scale and density smoothing. */
+  encoding: initialEncoding(),
+  scale: new URLSearchParams(location.search).get("scale") === "log" ? ("log" as const) : ("quantile" as const),
+  spread: new URLSearchParams(location.search).get("spread") === "smoothed" ? 1 : 0,
   lang: initialLang(),
   /**
    * The bounding box the grid samples — the whole of zoom, since a viewport
@@ -459,7 +520,7 @@ function mapTheme(background: string): Partial<Theme> {
   return {
     ...(dark ? darkTheme : lightTheme),
     background,
-    dot: state.dot ?? cssVar("--map-dot", dark ? "#6092d7" : "#6a6b6c"),
+    dot: state.dot ?? defaultDot(),
     route: state.accent,
     pin: state.accent,
     cluster: state.accent,
@@ -471,6 +532,19 @@ function mapTheme(background: string): Partial<Theme> {
     label: state.labelColor ?? cssVar("--text", dark ? "#e9eef8" : "#0f172a"),
     leader: state.leader ?? cssVar("--text", dark ? "#e9eef8" : "#0f172a"),
   };
+}
+
+/**
+ * The dot colour when none has been picked.
+ *
+ * The page's blue everywhere except the density view, where it would sit
+ * inside the shading ramp and an empty dot would read as a value. There it is
+ * the theme's own neutral, so "no customers" looks like nothing at all.
+ */
+function defaultDot(): string {
+  const dark = isDark();
+  if (state.mode === "data" && state.encoding === "density") return (dark ? darkTheme : lightTheme).dot;
+  return cssVar("--map-dot", dark ? "#6092d7" : "#6a6b6c");
 }
 
 /**
@@ -515,6 +589,9 @@ function render() {
   let routes: Route[] = [];
   let points: MapPoint[] = [];
   let regionColor: ((id: number) => string | undefined) | undefined;
+  let regionRadius: RenderOptions["regionRadius"];
+  let density: RenderOptions["density"];
+  const legend: Legend[] = [];
   let labels = false;
 
   if (state.mode === "routes") {
@@ -528,6 +605,25 @@ function render() {
       const d = districtById(id);
       return d ? PROVINCE_COLORS[(d.province - 1) % 7] : undefined;
     };
+  } else if (state.mode === "data") {
+    const { orders, stores, customers } = ILLUSTRATIVE;
+    if (state.encoding === "size" || state.encoding === "both") {
+      const size = sizeScale(stores.values());
+      regionRadius = (id) => size.radius(stores.get(id));
+      legend.push(size.legend("Stores"));
+    }
+    if (state.encoding === "colour" || state.encoding === "both") {
+      // The dark ramp runs the other way, so low values sink into the panel.
+      const colour = colorScale(orders.values(), {
+        mode: state.scale,
+        colors: (isDark() ? darkTheme : lightTheme).ramp,
+      });
+      regionColor = (id) => colour.color(orders.get(id));
+      legend.push(colour.legend("Orders per 1,000 people"));
+    }
+    if (state.encoding === "density") {
+      density = { points: customers, spread: state.spread, legend: "Customers per dot" };
+    }
   } else {
     const sel = state.find;
     const region = sel ? districtById(sel.regionId) : undefined;
@@ -572,9 +668,13 @@ function render() {
   // Only at district granularity: a dot-granular pin is a claim about one dot,
   // and painting its district would overstate it by ~15 dots. That pin is drawn
   // by `markPinnedDot` once the SVG is in the page.
+  //
+  // Not in the density view, where a density colour outranks `regionColor`:
+  // the shaded dots, the ones carrying the data, would stay at full strength
+  // while only the empty ones faded. `veilOthers` dims the rest there instead.
   const picked =
     state.highlight === "region" && state.selected?.kind === "region" ? state.selected.id : null;
-  if (picked !== null) {
+  if (picked !== null && !density) {
     const base = regionColor;
     regionColor = (id) =>
       id === picked ? state.accent : fade(base?.(id) ?? theme.dot!, 0.22);
@@ -586,6 +686,9 @@ function render() {
     routes,
     points,
     regionColor,
+    regionRadius,
+    density,
+    legend,
     labels,
     labelPlacement: state.placement,
     lang: state.lang,
@@ -597,7 +700,8 @@ function render() {
   // Keep keyboard focus across the re-render.
   const hadFocus = stage.contains(document.activeElement);
   stage.innerHTML = svg;
-  markPinnedDot();
+  markPinnedDot(regionRadius);
+  if (picked !== null && density) veilOthers(grid, picked, panel);
 
   const { clusters, offscreen } = clusterPoints(grid, points);
   const nodes = stage.querySelectorAll("*").length;
@@ -630,6 +734,17 @@ function render() {
       ["Locations", `${LOCATIONS.length}`],
       ["Dots used", `${clusters.length}`],
       ["Largest cluster", `${busiest}`],
+      ["DOM nodes", fmt(nodes)],
+      ["Grid build", `${gridMs.toFixed(1)} ms`],
+      ["SVG build", `${renderMs.toFixed(1)} ms`],
+    ];
+  } else if (state.mode === "data") {
+    rows = [
+      ["Encoding", { colour: "Colour", size: "Size", both: "Both", density: "Density" }[state.encoding]],
+      state.encoding === "density"
+        ? ["Customers", fmt(ILLUSTRATIVE.customers.length)]
+        : ["Districts", `${DISTRICTS.length}`],
+      ["Dot paths", fmt(stage.querySelectorAll(".naksha-dots path").length)],
       ["DOM nodes", fmt(nodes)],
       ["Grid build", `${gridMs.toFixed(1)} ms`],
       ["SVG build", `${renderMs.toFixed(1)} ms`],
@@ -675,10 +790,16 @@ function render() {
   }
 
   readout.innerHTML = rows.map(([k, v]) => `<div><k>${k}</k><v>${v}</v></div>`).join("");
+  // Raw counts per dot, so a hover can say how many customers a dot holds even
+  // when the shading is smoothed.
+  customersOnDot =
+    state.mode === "data" && state.encoding === "density"
+      ? new Map(clusterPoints(grid, ILLUSTRATIVE.customers).clusters.map((c) => [c.row * grid.cols + c.col, c.count]))
+      : null;
   lastCounts = { shown: points.length - offscreen.length, dots: clusters.length };
   hint.innerHTML = state.selected ? describeSelection() : defaultHint();
   renderMinimap(theme);
-  attach(grid, points, routes);
+  attach(grid, points, routes, regionRadius);
   if (hadFocus) stage.querySelector("svg")?.focus({ preventScroll: true });
 }
 
@@ -686,6 +807,7 @@ function describe(): string {
   if (state.mode === "routes") return "Routes radiating from Kathmandu";
   if (state.mode === "network") return "A network of locations across Nepal";
   if (state.mode === "districts") return "Districts of Nepal, coloured by province";
+  if (state.mode === "data") return "Illustrative values by district";
   const d = state.find ? districtById(state.find.regionId) : undefined;
   return d ? `${state.find!.name} in ${d.name} district` : "Find a district or place";
 }
@@ -733,6 +855,18 @@ function defaultHint(): string {
       `${where} <b>${dots} dots</b> — ${shown - dots} share one with a neighbour, and ` +
       `the badge reports it rather than hiding the overlap.` + verb()
     );
+  }
+  if (state.mode === "data") {
+    const what = {
+      colour: "Each district's dots are coloured by its value, with a legend built from the same scale.",
+      size: "Dot <em>area</em> grows with each district's value — area, because that is what the eye compares.",
+      both: "Two values on the same dots: size shows one, colour the other.",
+      density:
+        state.spread > 0
+          ? "Each customer is spread over the dots around it, which reads as a heatmap but shades dots that hold no customer of their own."
+          : "Each dot is shaded by how many customers snap to it, on a log scale. Zoom in and they spread over finer dots.",
+    }[state.encoding];
+    return `${what} <span class="alt-script">Illustrative data, generated for this demo.</span>` + verb();
   }
   if (state.mode === "districts") {
     return (
@@ -797,21 +931,70 @@ const coordLiteral = (dot: Dot) => `{ lng: ${dot.lng.toFixed(4)}, lat: ${dot.lat
  * Inserted directly above the dot field rather than appended, so a pin or route
  * crossing the same cell still paints over it — the same order the library's own
  * highlight overlay uses.
+ *
+ * A dot sized by value is lifted in proportion to its own size, by the same
+ * rule the library's overlay follows, so hover and pin still match in the size
+ * view and a small district's pin doesn't swell it to the largest.
  */
-function markPinnedDot() {
+function markPinnedDot(regionRadius: RenderOptions["regionRadius"]) {
   const sel = state.selected;
   if (state.highlight !== "dot" || sel?.kind !== "region") return;
   const dots = stage.querySelector(".naksha-dots");
   if (!dots?.parentNode) return;
+  const sized = regionRadius?.(sel.dot.region);
+  const r = sized === undefined ? HIGHLIGHT_RADIUS : (sized * HIGHLIGHT_RADIUS) / lightTheme.dotRadius;
+  if (!(r > 0)) return;
 
   const el = document.createElementNS("http://www.w3.org/2000/svg", "circle");
   el.setAttribute("cx", String(sel.dot.col + 0.5));
   el.setAttribute("cy", String(sel.dot.row + 0.5));
-  el.setAttribute("r", String(HIGHLIGHT_RADIUS));
+  el.setAttribute("r", String(r));
   el.setAttribute("fill", state.accent);
   // The dot underneath is still the hit target; this is only paint.
   el.setAttribute("pointer-events", "none");
   dots.parentNode.insertBefore(el, dots.nextSibling);
+}
+
+/**
+ * Dim every district but the picked one, in the density view.
+ *
+ * Panel colour at 78% over a dot mixes it to exactly what `fade(color, 0.22)`
+ * gives the other views, while leaving the picked district's shading, and the
+ * legend describing it, as they were.
+ */
+function veilOthers(grid: Grid, picked: number, panel: string) {
+  const dots = stage.querySelector(".naksha-dots");
+  if (!dots?.parentNode) return;
+  // A hair wider than the dots, or their anti-aliased rims show through as rings.
+  const r = lightTheme.dotRadius + 0.03;
+  const n = (v: number) => +v.toFixed(3);
+  const d = grid.dots
+    .filter((dot) => dot.region !== picked)
+    .map((dot) => `M${n(dot.col + 0.5 - r)} ${n(dot.row + 0.5)}a${r} ${r} 0 1 0 ${n(2 * r)} 0a${r} ${r} 0 1 0 ${n(-2 * r)} 0`)
+    .join("");
+
+  const el = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  el.setAttribute("d", d);
+  el.setAttribute("fill", panel);
+  el.setAttribute("fill-opacity", "0.78");
+  el.setAttribute("pointer-events", "none");
+  dots.parentNode.insertBefore(el, dots.nextSibling);
+}
+
+/** Raw customer counts per dot in the density view, keyed like `dotIndex`. */
+let customersOnDot: Map<number, number> | null = null;
+
+/** The Data view's figure for whatever is under the pointer, or "". */
+function describeValue(dot: Dot): string {
+  if (state.mode !== "data") return "";
+  if (state.encoding === "density") {
+    const n = customersOnDot?.get(dot.row * (currentGrid?.cols ?? 0) + dot.col) ?? 0;
+    return ` · <b>${n.toLocaleString()}</b> customer${n === 1 ? "" : "s"} on this dot`;
+  }
+  const parts: string[] = [];
+  if (state.encoding !== "size") parts.push(`<b>${formatValue(ILLUSTRATIVE.orders.get(dot.region) ?? 0)}</b> orders per 1,000`);
+  if (state.encoding !== "colour") parts.push(`<b>${ILLUSTRATIVE.stores.get(dot.region) ?? 0}</b> stores`);
+  return ` · ${parts.join(", ")}`;
 }
 
 function describeRegion(dot: Dot): string {
@@ -824,6 +1007,7 @@ function describeRegion(dot: Dot): string {
     `<b>${primary}</b> <span class="alt-script">${secondary}</span> — ` +
     `${regionProvince(d, state.lang)}, p-code ${d.pcode}` +
     (d.hq ? `, HQ ${state.lang === "np" ? (d.hqNp ?? d.hq) : d.hq}` : "") +
+    describeValue(dot) +
     ` · dot at ${dot.lat.toFixed(2)}°N ${dot.lng.toFixed(2)}°E`
   );
 }
@@ -898,7 +1082,7 @@ let currentRoutes: Route[] = [];
  * it — but the highlight overlay and the cursor are ours, so detach properly
  * rather than relying on that.
  */
-function attach(grid: Grid, points: MapPoint[], routes: Route[]) {
+function attach(grid: Grid, points: MapPoint[], routes: Route[], regionRadius: RenderOptions["regionRadius"]) {
   detach?.();
   detach = null;
   currentGrid = grid;
@@ -919,6 +1103,7 @@ function attach(grid: Grid, points: MapPoint[], routes: Route[]) {
       // Coarse pointers get a wider net; a fingertip covers several cells.
       tolerance: matchMedia("(pointer: coarse)").matches ? 1 : 0,
       highlight: { color: state.accent, radius: HIGHLIGHT_RADIUS, mode: state.highlight },
+      regionRadius,
       // The dot events, not the region ones: the line quotes a coordinate, and
       // `onRegionEnter` would only fire on the district's first dot — so the
       // coordinate would stick there while the pointer moved on.
@@ -934,8 +1119,9 @@ function attach(grid: Grid, points: MapPoint[], routes: Route[]) {
 
   // Click mode. No hover overlay: the selection is baked into the next render
   // instead — through `regionColor` at district granularity, which is the API a
-  // real app would reach for, and through `markPinnedDot` at dot granularity,
-  // which is what `regionColor` cannot say.
+  // real app would reach for (`veilOthers` in the density view, where density
+  // outranks it), and through `markPinnedDot` at dot granularity, which is what
+  // `regionColor` cannot say.
   const release = attachInteractions(svg, grid, {
     points,
     routes,
@@ -1007,6 +1193,7 @@ $("#mode").addEventListener("click", (e) => {
   syncColors();
   syncPlacement();
   syncContext();
+  syncData();
   render();
   if (state.mode === "find") input.focus();
 });
@@ -1570,6 +1757,66 @@ contextGroup.addEventListener("click", (e) => {
   render();
 });
 
+// ------------------------------------------------------- data controls ---
+
+/**
+ * The three Data-view controls, each greyed out with a reason when it would do
+ * nothing — the same rule every other control on the page follows.
+ */
+const DATA_CONTROLS = [
+  {
+    group: $<HTMLElement>("#encoding"),
+    attr: "data-encoding",
+    value: () => state.encoding,
+    set: (v: string) => (state.encoding = v as Encoding),
+    inert: () => (state.mode === "data" ? null : "Only the Data view encodes values."),
+  },
+  {
+    group: $<HTMLElement>("#scale"),
+    attr: "data-scale",
+    value: () => state.scale,
+    set: (v: string) => (state.scale = v === "log" ? "log" : "quantile"),
+    inert: () =>
+      state.mode !== "data"
+        ? "Only the Data view encodes values."
+        : state.encoding === "size" || state.encoding === "density"
+          ? "This encoding uses no colour scale."
+          : null,
+  },
+  {
+    group: $<HTMLElement>("#spread"),
+    attr: "data-spread",
+    value: () => (state.spread > 0 ? "smoothed" : "exact"),
+    set: (v: string) => (state.spread = v === "smoothed" ? 1 : 0),
+    inert: () =>
+      state.mode !== "data" || state.encoding !== "density" ? "Only the Density encoding uses this." : null,
+  },
+];
+
+function syncData() {
+  for (const c of DATA_CONTROLS) {
+    const why = c.inert();
+    const control = c.group.closest<HTMLElement>(".control")!;
+    control.classList.toggle("is-off", why !== null);
+    control.title = why ?? "";
+    c.group.querySelectorAll("button").forEach((b) => {
+      b.disabled = why !== null;
+      b.classList.toggle("on", b.getAttribute(c.attr) === c.value());
+    });
+  }
+}
+
+for (const c of DATA_CONTROLS) {
+  c.group.addEventListener("click", (e) => {
+    const value = (e.target as Element).closest("button")?.getAttribute(c.attr);
+    if (!value) return;
+    c.set(value);
+    syncData();
+    syncColors();
+    render();
+  });
+}
+
 // ---------------------------------------------------- colour pickers ---
 
 /**
@@ -1619,13 +1866,15 @@ function wireColor(id: string, slot: ColorSlot): () => void {
 const syncDotControl = wireColor("dot", {
   get: () => state.dot,
   set: (v) => (state.dot = v),
-  fallback: () => cssVar("--map-dot", isDark() ? "#6092d7" : "#6a6b6c"),
+  fallback: defaultDot,
   // The districts view hands every dot a province colour through `regionColor`,
   // which outranks `theme.dot` entirely.
   inert: () =>
     state.mode === "districts"
       ? "The districts view colours every dot by province, so it overrides this."
-      : null,
+      : state.mode === "data" && (state.encoding === "colour" || state.encoding === "both")
+        ? "Every dot is coloured by its district's value, so it overrides this."
+        : null,
 });
 
 const syncLabelControl = wireColor("label", {
@@ -1857,6 +2106,7 @@ syncFinder();
 syncColors();
 syncPlacement();
 syncContext();
+syncData();
 syncHighlight();
 
 addCopyButtons();
