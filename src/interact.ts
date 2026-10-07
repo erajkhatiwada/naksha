@@ -23,6 +23,7 @@ import { clusterPoints } from "./cluster.ts";
 import type { Route } from "./route.ts";
 import { fmt } from "./route.ts";
 import { circleSubpath } from "./svg.ts";
+import { lightTheme } from "./theme.ts";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -118,7 +119,11 @@ export interface HighlightOptions {
   mode?: "region" | "dot";
   /** Default `currentColor`, so CSS on the `<svg>` can drive it. */
   color?: string;
-  /** Dot radius in dot units. Slightly above the theme's 0.3 so it reads as a lift. */
+  /**
+   * Dot radius in dot units. Slightly above the theme's 0.3 so it reads as a
+   * lift. A dot sized by `regionRadius` is lifted by the same proportion of
+   * its own size instead.
+   */
   radius?: number;
   opacity?: number;
 }
@@ -132,6 +137,13 @@ export interface InteractionOptions<T extends MapPoint = MapPoint> {
   tolerance?: number;
   /** Paint the hovered district. `true` accepts every default. */
   highlight?: boolean | HighlightOptions;
+  /**
+   * The same `regionRadius` passed to the renderer, so the highlight keeps
+   * each district's dot size. Without it every highlighted dot is drawn at
+   * `highlight.radius`, and on a map sized by value, hovering a small district
+   * swells it to look like the largest.
+   */
+  regionRadius?: (regionId: number) => number | undefined;
   /**
    * Make the map focusable and traversable with the arrow keys, Enter and
    * Escape. Pair it with an `aria-live` readout fed from `onRegionEnter` —
@@ -225,31 +237,45 @@ export function attachInteractions<T extends MapPoint = MapPoint>(
       : options.highlight;
   const hlRadius = hl?.radius ?? 0.34;
   const overlay = hl ? createOverlay(svg, hl) : null;
-  const regionPaths = new Map<number, string>();
+  // Keyed on the radius too: the React wrapper reads `regionRadius` through a
+  // ref, so new data can resize a district without re-attaching.
+  const regionPaths = new Map<string, string>();
 
-  function regionPath(region: number): string {
-    let d = regionPaths.get(region);
+  /**
+   * A district's highlighted radius: `hlRadius` for an unsized dot, and the
+   * same proportional lift on a sized one, so a hovered district keeps its rank
+   * against its neighbours. Sized to nothing, it stays nothing — a highlight
+   * must not draw dots the map does not have.
+   */
+  function radiusOf(region: number): number {
+    const r = options.regionRadius?.(region);
+    if (r === undefined || !Number.isFinite(r)) return hlRadius;
+    return (Math.max(0, r) * hlRadius) / lightTheme.dotRadius;
+  }
+
+  function regionPath(region: number, r: number): string {
+    const key = `${region}|${r}`;
+    let d = regionPaths.get(key);
     if (d === undefined) {
       const parts: string[] = [];
       for (const dot of grid.dots) {
-        if (dot.region === region) parts.push(circleSubpath(dot.col + 0.5, dot.row + 0.5, hlRadius));
+        if (dot.region === region) parts.push(circleSubpath(dot.col + 0.5, dot.row + 0.5, r));
       }
-      regionPaths.set(region, (d = parts.join("")));
+      regionPaths.set(key, (d = parts.join("")));
     }
     return d;
   }
 
   function paint(dot: Dot | null): void {
     if (!overlay) return;
-    if (!dot) {
+    const r = dot ? radiusOf(dot.region) : 0;
+    if (!dot || r <= 0) {
       overlay.setAttribute("d", "");
       return;
     }
     overlay.setAttribute(
       "d",
-      hl!.mode === "dot"
-        ? circleSubpath(dot.col + 0.5, dot.row + 0.5, hlRadius)
-        : regionPath(dot.region),
+      hl!.mode === "dot" ? circleSubpath(dot.col + 0.5, dot.row + 0.5, r) : regionPath(dot.region, r),
     );
   }
 

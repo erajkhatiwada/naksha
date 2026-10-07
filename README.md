@@ -332,7 +332,8 @@ const detach = attachInteractions(el.querySelector("svg")!, grid, {
   Its `dot` is whichever one you crossed the border on — use `onDotEnter` for
   the one actually under the pointer.
 - `highlight: true` lights the whole district; `highlight: { mode: "dot" }`
-  lights only the dot.
+  lights only the dot. On a map sized with `regionRadius`, pass the same
+  function here too, so a hovered district keeps its size (React does this for you).
 - Arrow-key traversal reports through the same handlers.
 
 In React the same thing is props and the component attaches and detaches for

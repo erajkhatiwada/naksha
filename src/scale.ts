@@ -222,7 +222,9 @@ export function colorScale(values: Iterable<number>, options: ColorScaleOptions 
 
   let cuts: number[];
   if (mode === "breaks") {
-    cuts = [...new Set(options.breaks!)].sort((a, b) => a - b);
+    // Finite only: a NaN compares false both ways, so one of them stops `sort`
+    // ordering the rest, and every value after it lands in the wrong class.
+    cuts = [...new Set(options.breaks!.filter(Number.isFinite))].sort((a, b) => a - b);
   } else {
     const k = Math.max(1, Math.floor(options.classes ?? 5));
     const raw =

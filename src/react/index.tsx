@@ -227,20 +227,24 @@ export function Naksha({
   // Handlers are read through a ref so an inline arrow function — which is what
   // every caller writes — doesn't tear down and re-attach the listeners on
   // every render. Only *whether* a handler exists is a dependency.
+  // `regionRadius` rides along for the same reason: it is usually an inline
+  // arrow too, and the highlight only needs whichever one is current.
   const latest = useRef({
     onRegionEnter,
     onRegionLeave,
     onRegionClick,
     onDotEnter,
     onDotLeave,
+    regionRadius,
   });
-  latest.current = { onRegionEnter, onRegionLeave, onRegionClick, onDotEnter, onDotLeave };
+  latest.current = { onRegionEnter, onRegionLeave, onRegionClick, onDotEnter, onDotLeave, regionRadius };
 
   const wantsEnter = !!onRegionEnter;
   const wantsLeave = !!onRegionLeave;
   const wantsClick = !!onRegionClick;
   const wantsDotEnter = !!onDotEnter;
   const wantsDotLeave = !!onDotLeave;
+  const sized = !!regionRadius;
   const highlightKey = JSON.stringify(highlight ?? null);
 
   useEffect(() => {
@@ -253,6 +257,7 @@ export function Naksha({
       highlight,
       keyboard,
       tolerance: hitTolerance,
+      regionRadius: sized ? (id) => latest.current.regionRadius?.(id) : undefined,
       // Pins and routes are React elements here, with React handlers. They are
       // still recognised by their data attributes, which is what stops a region
       // event firing for the dot underneath a pin.
@@ -278,6 +283,7 @@ export function Naksha({
     highlightKey,
     keyboard,
     hitTolerance,
+    sized,
   ]);
 
   return (

@@ -668,9 +668,13 @@ function render() {
   // Only at district granularity: a dot-granular pin is a claim about one dot,
   // and painting its district would overstate it by ~15 dots. That pin is drawn
   // by `markPinnedDot` once the SVG is in the page.
+  //
+  // Not in the density view, where a density colour outranks `regionColor`:
+  // the shaded dots, the ones carrying the data, would stay at full strength
+  // while only the empty ones faded. `veilOthers` dims the rest there instead.
   const picked =
     state.highlight === "region" && state.selected?.kind === "region" ? state.selected.id : null;
-  if (picked !== null) {
+  if (picked !== null && !density) {
     const base = regionColor;
     regionColor = (id) =>
       id === picked ? state.accent : fade(base?.(id) ?? theme.dot!, 0.22);
@@ -696,7 +700,8 @@ function render() {
   // Keep keyboard focus across the re-render.
   const hadFocus = stage.contains(document.activeElement);
   stage.innerHTML = svg;
-  markPinnedDot();
+  markPinnedDot(regionRadius);
+  if (picked !== null && density) veilOthers(grid, picked, panel);
 
   const { clusters, offscreen } = clusterPoints(grid, points);
   const nodes = stage.querySelectorAll("*").length;
@@ -794,7 +799,7 @@ function render() {
   lastCounts = { shown: points.length - offscreen.length, dots: clusters.length };
   hint.innerHTML = state.selected ? describeSelection() : defaultHint();
   renderMinimap(theme);
-  attach(grid, points, routes);
+  attach(grid, points, routes, regionRadius);
   if (hadFocus) stage.querySelector("svg")?.focus({ preventScroll: true });
 }
 
@@ -926,19 +931,52 @@ const coordLiteral = (dot: Dot) => `{ lng: ${dot.lng.toFixed(4)}, lat: ${dot.lat
  * Inserted directly above the dot field rather than appended, so a pin or route
  * crossing the same cell still paints over it — the same order the library's own
  * highlight overlay uses.
+ *
+ * A dot sized by value is lifted in proportion to its own size, by the same
+ * rule the library's overlay follows, so hover and pin still match in the size
+ * view and a small district's pin doesn't swell it to the largest.
  */
-function markPinnedDot() {
+function markPinnedDot(regionRadius: RenderOptions["regionRadius"]) {
   const sel = state.selected;
   if (state.highlight !== "dot" || sel?.kind !== "region") return;
   const dots = stage.querySelector(".naksha-dots");
   if (!dots?.parentNode) return;
+  const sized = regionRadius?.(sel.dot.region);
+  const r = sized === undefined ? HIGHLIGHT_RADIUS : (sized * HIGHLIGHT_RADIUS) / lightTheme.dotRadius;
+  if (!(r > 0)) return;
 
   const el = document.createElementNS("http://www.w3.org/2000/svg", "circle");
   el.setAttribute("cx", String(sel.dot.col + 0.5));
   el.setAttribute("cy", String(sel.dot.row + 0.5));
-  el.setAttribute("r", String(HIGHLIGHT_RADIUS));
+  el.setAttribute("r", String(r));
   el.setAttribute("fill", state.accent);
   // The dot underneath is still the hit target; this is only paint.
+  el.setAttribute("pointer-events", "none");
+  dots.parentNode.insertBefore(el, dots.nextSibling);
+}
+
+/**
+ * Dim every district but the picked one, in the density view.
+ *
+ * Panel colour at 78% over a dot mixes it to exactly what `fade(color, 0.22)`
+ * gives the other views, while leaving the picked district's shading, and the
+ * legend describing it, as they were.
+ */
+function veilOthers(grid: Grid, picked: number, panel: string) {
+  const dots = stage.querySelector(".naksha-dots");
+  if (!dots?.parentNode) return;
+  // A hair wider than the dots, or their anti-aliased rims show through as rings.
+  const r = lightTheme.dotRadius + 0.03;
+  const n = (v: number) => +v.toFixed(3);
+  const d = grid.dots
+    .filter((dot) => dot.region !== picked)
+    .map((dot) => `M${n(dot.col + 0.5 - r)} ${n(dot.row + 0.5)}a${r} ${r} 0 1 0 ${n(2 * r)} 0a${r} ${r} 0 1 0 ${n(-2 * r)} 0`)
+    .join("");
+
+  const el = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  el.setAttribute("d", d);
+  el.setAttribute("fill", panel);
+  el.setAttribute("fill-opacity", "0.78");
   el.setAttribute("pointer-events", "none");
   dots.parentNode.insertBefore(el, dots.nextSibling);
 }
@@ -1044,7 +1082,7 @@ let currentRoutes: Route[] = [];
  * it — but the highlight overlay and the cursor are ours, so detach properly
  * rather than relying on that.
  */
-function attach(grid: Grid, points: MapPoint[], routes: Route[]) {
+function attach(grid: Grid, points: MapPoint[], routes: Route[], regionRadius: RenderOptions["regionRadius"]) {
   detach?.();
   detach = null;
   currentGrid = grid;
@@ -1065,6 +1103,7 @@ function attach(grid: Grid, points: MapPoint[], routes: Route[]) {
       // Coarse pointers get a wider net; a fingertip covers several cells.
       tolerance: matchMedia("(pointer: coarse)").matches ? 1 : 0,
       highlight: { color: state.accent, radius: HIGHLIGHT_RADIUS, mode: state.highlight },
+      regionRadius,
       // The dot events, not the region ones: the line quotes a coordinate, and
       // `onRegionEnter` would only fire on the district's first dot — so the
       // coordinate would stick there while the pointer moved on.
@@ -1080,8 +1119,9 @@ function attach(grid: Grid, points: MapPoint[], routes: Route[]) {
 
   // Click mode. No hover overlay: the selection is baked into the next render
   // instead — through `regionColor` at district granularity, which is the API a
-  // real app would reach for, and through `markPinnedDot` at dot granularity,
-  // which is what `regionColor` cannot say.
+  // real app would reach for (`veilOthers` in the density view, where density
+  // outranks it), and through `markPinnedDot` at dot granularity, which is what
+  // `regionColor` cannot say.
   const release = attachInteractions(svg, grid, {
     points,
     routes,

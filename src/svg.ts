@@ -1082,8 +1082,10 @@ export function renderLegend(
   options: Pick<RenderOptions, "legend" | "legendCorner" | "density">,
   density?: DensityField,
 ): string {
+  // Falsy rather than undefined, so `legend: show && scale.legend()` — the
+  // idiom every JSX caller writes — draws nothing instead of throwing on `in`.
   const legends: Legend[] =
-    options.legend === undefined ? [] : "kind" in options.legend ? [options.legend] : [...options.legend];
+    !options.legend ? [] : "kind" in options.legend ? [options.legend] : [...options.legend];
   if (options.density?.legend && density && density.values.size) {
     legends.push({ kind: "ramp", title: options.density.legend, colors: theme.ramp, min: density.min, max: density.max });
   }

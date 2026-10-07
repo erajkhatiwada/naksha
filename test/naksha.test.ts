@@ -1560,6 +1560,31 @@ describe("dot-level hover events", () => {
     assert.deepEqual(dots, [`${a.col},${a.row}`, `${b.col},${b.row}`]);
     assert.equal(regions, 1);
   });
+
+  test("the highlight lifts a sized dot in proportion, not to one fixed size", () => {
+    const { grid, a } = adjacentPair();
+    const drawn = (regionRadius?: (id: number) => number | undefined) => {
+      const svg = fakeSvg();
+      const overlay = {
+        d: "",
+        setAttribute(k: string, v: string) {
+          if (k === "d") this.d = v;
+        },
+        remove() {},
+      };
+      Object.assign(svg, { ownerDocument: { createElementNS: () => overlay }, appendChild() {} });
+      attachInteractions(svg as never, grid, { highlight: true, regionRadius });
+      at(svg, a);
+      return overlay.d === "" ? 0 : Number(/a([\d.]+) /.exec(overlay.d)![1]);
+    };
+
+    assert.equal(drawn(), 0.34);
+    assert.equal(drawn(() => undefined), 0.34);
+    // Half the theme's dot, so half the lift: the district keeps its rank.
+    assert.equal(drawn(() => 0.15), 0.17);
+    // Sized to nothing, there is nothing to light.
+    assert.equal(drawn(() => 0), 0);
+  });
 });
 
 describe("clamping a viewport to the frame", () => {
@@ -2423,6 +2448,12 @@ describe("colour scales", () => {
     assert.equal(scale.colors.length, 3);
   });
 
+  test("a non-finite break is dropped rather than unsorting the rest", () => {
+    const scale = colorScale([1, 2, 3], { breaks: [2, NaN, 1] });
+    assert.deepEqual(scale.breaks, [1, 2]);
+    assert.equal(scale.color(1.5), scale.colors[1]);
+  });
+
   test("classes run the whole ramp, end to end", () => {
     const { colors } = colorScale(areas.values());
     assert.equal(colors[0], ramp[0]);
@@ -2619,6 +2650,12 @@ describe("legends", () => {
 
   test("draws nothing unless asked", () => {
     assert.doesNotMatch(renderNepal({ regionColor: (id) => scale.color(areas.get(id)) }), /naksha-legend/);
+  });
+
+  test("a falsy legend draws nothing rather than throwing", () => {
+    for (const legend of [null, false]) {
+      assert.doesNotMatch(renderNepal({ legend: legend as never }), /naksha-legend/);
+    }
   });
 
   test("sits in the bottom-left by default, where the national view has no dots", () => {
